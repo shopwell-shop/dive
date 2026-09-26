@@ -1,0 +1,152 @@
+import { makeActionDeps } from '../../../__test__/actionDeps.ts';
+import { GenerateMediaAction } from '../generatemedia.ts';
+import { type EntitySchema } from '../../../../types/index.ts';
+import { Vector3 } from 'three/webgpu';
+import {
+    type MediaGenerationById,
+    type MediaGenerationByPosition,
+} from '@shopwell-ag/dive/mediacreator';
+
+const mockGenerateMedia = vi
+    .fn()
+    .mockResolvedValue('data:image/png;base64,test');
+const mockGetMediaCreator = vi.fn().mockResolvedValue({
+    generateMedia: mockGenerateMedia,
+});
+
+describe('GenerateMediaAction', () => {
+    const deps = makeActionDeps();
+
+    it('should generate media from position and target', async () => {
+        const action = new GenerateMediaAction(
+            {
+                position: new Vector3(1, 1, 1),
+                target: new Vector3(0, 0, 0),
+                resolution: {
+                    width: 800,
+                    height: 600,
+                },
+            } as MediaGenerationByPosition,
+            {
+                getMediaCreator: mockGetMediaCreator,
+                ...deps,
+            },
+        );
+
+        // Execute action
+        const result = await action.execute();
+
+        // Verify results
+        expect(mockGetMediaCreator).toHaveBeenCalled();
+        expect(mockGenerateMedia).toHaveBeenCalledWith({
+            position: expect.objectContaining({ x: 1, y: 1, z: 1 }),
+            target: expect.objectContaining({ x: 0, y: 0, z: 0 }),
+            resolution: {
+                width: 800,
+                height: 600,
+            },
+        });
+        expect(result).toBe('data:image/png;base64,test');
+    });
+
+    it('should generate media from CAMERA', async () => {
+        const testCAMERA: EntitySchema = {
+            id: 'test-camera',
+            entityType: 'camera',
+            position: new Vector3(1, 1, 1),
+            target: new Vector3(0, 0, 0),
+            rotation: { x: 0, y: 0, z: 0 },
+            scale: { x: 1, y: 1, z: 1 },
+            name: 'Test CAMERA',
+            visible: true,
+        } as unknown as EntitySchema;
+
+        // Add the CAMERA first
+        deps.registry.register(testCAMERA);
+
+        const action = new GenerateMediaAction(
+            {
+                id: 'test-camera',
+                resolution: {
+                    width: 800,
+                    height: 600,
+                },
+            } as MediaGenerationById,
+            {
+                getMediaCreator: mockGetMediaCreator,
+                ...deps,
+            },
+        );
+
+        // Execute action
+        const result = await action.execute();
+
+        // Verify results
+        expect(mockGetMediaCreator).toHaveBeenCalled();
+        expect(mockGenerateMedia).toHaveBeenCalledWith({
+            position: expect.objectContaining({ x: 1, y: 1, z: 1 }),
+            target: expect.objectContaining({ x: 0, y: 0, z: 0 }),
+            resolution: {
+                width: 800,
+                height: 600,
+            },
+        });
+        expect(result).toBe('data:image/png;base64,test');
+    });
+
+    it('should throw error if CAMERA is not registered', async () => {
+        const action = new GenerateMediaAction(
+            {
+                id: 'non-existent-camera',
+                resolution: {
+                    width: 800,
+                    height: 600,
+                },
+            } as MediaGenerationById,
+            {
+                getMediaCreator: mockGetMediaCreator,
+                ...deps,
+            },
+        );
+
+        // Execute action and expect error
+        await expect(action.execute()).rejects.toThrow(
+            'Object with id non-existent-camera not registered',
+        );
+    });
+
+    it('should throw error if object is not a CAMERA', async () => {
+        const testObject: EntitySchema = {
+            id: 'test-object',
+            entityType: 'model',
+            position: new Vector3(1, 1, 1),
+            target: new Vector3(0, 0, 0),
+            rotation: { x: 0, y: 0, z: 0 },
+            scale: { x: 1, y: 1, z: 1 },
+            name: 'Test Object',
+            visible: true,
+        } as unknown as EntitySchema;
+
+        // Add the object first
+        deps.registry.register(testObject);
+
+        const action = new GenerateMediaAction(
+            {
+                id: 'test-object',
+                resolution: {
+                    width: 800,
+                    height: 600,
+                },
+            } as MediaGenerationById,
+            {
+                getMediaCreator: mockGetMediaCreator,
+                ...deps,
+            },
+        );
+
+        // Execute action and expect error
+        await expect(action.execute()).rejects.toThrow(
+            'Object with id test-object is not a CAMERA',
+        );
+    });
+});

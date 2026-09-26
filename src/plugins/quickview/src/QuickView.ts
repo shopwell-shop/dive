@@ -1,0 +1,296 @@
+import {
+    BoundingBox,
+    DIVE,
+    DIVEDefaultSettings,
+    DIVENode,
+    disposeComponents,
+    ModelComponent,
+} from '@shopwell-ag/dive';
+import { OrbitController } from '@shopwell-ag/dive/orbitcontroller';
+import type { State, StateData } from '@shopwell-ag/dive/state';
+import { type QuickViewSettings } from '../types/index.ts';
+
+/**
+ * What {@link QuickView} hands back.
+ *
+ * Named after the factory, and declared in the same module so it can be: a
+ * function lives in the value namespace and a type in the type one, so one
+ * import and no `type` keyword covers both.
+ *
+ *     import { QuickView } from '@shopwell-ag/dive/quickview';
+ *     const view: Ref<QuickView | null> = ref(null);
+ *
+ * One type, because a QuickView can hold either kind of source and can be handed
+ * the other one later -- {@link load} takes whatever {@link QuickView} takes. So
+ * which of {@link model} and {@link state} is there is a question about right
+ * now, not about how the view was built, and both are therefore nullable rather
+ * than promised.
+ */
+export type QuickView = DIVE & {
+    orbitController: OrbitController;
+
+    /** The node the model sits on, or `null` while a scene state is loaded. */
+    readonly model: DIVENode | null;
+
+    /** The state driving the scene, or `null` while a single model is loaded. */
+    readonly state: State | null;
+
+    /**
+     * Puts something else in front of the viewer.
+     *
+     * Takes the same sources the factory does, and replaces whatever is loaded --
+     * including across kinds: a QuickView built from a URI can be handed scene
+     * state and the other way round. The previous source is torn down first, its
+     * GPU resources included.
+     *
+     * @param source - A model URI, or the scene data to apply.
+     */
+    load: (source: string | StateData) => Promise<void>;
+};
+
+export const QuickViewDefaultSettings: Omit<
+    Required<QuickViewSettings>,
+    'hdr'
+> = {
+    ...DIVEDefaultSettings,
+};
+
+/** Frees the GPU resources of every component below a node, and unparents it. */
+const disposeNode = (node: DIVENode): void => {
+    disposeComponents(node);
+    node.removeFromParent();
+};
+
+/**
+ * Creates a QuickView from a model URI or from scene data.
+ *
+ * @param source - A model URI, or the scene data to display.
+ * @param settings - The settings for the QuickView.
+ */
+export async function QuickView(
+    source: string | StateData,
+    settings?: Partial<QuickViewSettings>,
+): Promise<QuickView> {
+    /** Read by a load that settles after the setup gave up. */
+    let disposed = false;
+
+    /**
+     * Built before the `try`, so the `catch` can reach it without it being
+     * nullable. Nothing needs taking back if this line is what fails, and a
+     * failure after it must be cleaned up: a DIVE registers itself in a global
+     * list and is only removed by its own dispose, so one left behind eats an
+     * instance slot for good -- and may leave a clock running.
+     */
+    const dive = new DIVE({ ...settings, autoStart: false });
+
+    try {
+        /**
+         * the node, not the camera: the camera sits at its node's origin, and the
+         * controller below moves the node
+         */
+        dive.mainView.cameraComponent.owner.position.set(0, 1, 2);
+
+        /**
+         * The aspect the camera is built with is a placeholder, and framing
+         * reads it: a portrait viewport fits horizontally, so a frame against
+         * the placeholder puts the camera too close. A laid-out canvas answers
+         * it here already, long before the view runs and reports the same size.
+         * A canvas the consumer has yet to mount measures zero, which is no
+         * answer at all -- better the placeholder than a NaN aspect.
+         */
+        const { clientWidth: width, clientHeight: height } =
+            dive.mainView.canvas;
+        if (width > 0 && height > 0) {
+            dive.mainView.cameraComponent.onResize(width, height);
+        }
+
+        const orbitController = new OrbitController(
+            dive.mainView.cameraComponent,
+            dive.mainView.canvas,
+        );
+        dive.clock.addTicker(orbitController);
+
+        let model: DIVENode | null = null;
+        let state: State | null = null;
+
+        /**
+         * Which load is the current one, and the tail of the ones before it.
+         *
+         * Loads are serialized rather than allowed to interleave: both kinds
+         * mutate `model` and `state`, and an asset that settles late would
+         * otherwise write into what a newer load already took away. Queued loads
+         * that a newer one has overtaken are skipped entirely -- latest wins,
+         * and nothing in between is fetched for nothing.
+         */
+        let generation = 0;
+        let queue: Promise<void> = Promise.resolve();
+
+        /**
+         * Frames whatever is loaded, if there is anything to frame.
+         *
+         * Asks the geometry, because that is the question: an empty box measures
+         * a negative radius, which would put the camera behind its own target.
+         * Entity kinds cannot answer it -- a model's marker sits in `userData`
+         * and a primitive has none, so anything reading brands off what
+         * `SET_STATE` returns finds nothing and frames nothing.
+         */
+        const frame = (): void => {
+            const target = model ?? dive.scene.root;
+            if (new BoundingBox().enclose(target).isEmpty) return;
+
+            orbitController.focusObject(target);
+        };
+
+        /** Takes down whatever is loaded, so the two kinds never coexist. */
+        const clear = (): void => {
+            if (model) {
+                disposeNode(model);
+                model = null;
+            }
+
+            if (state) {
+                // otherwise the instance lingers in State's static registry
+                state.destroyInstance();
+                state = null;
+
+                // the entities the state created are the root's child nodes
+                dive.scene.root.nodes.forEach(disposeNode);
+            }
+        };
+
+        /**
+         * Installed as soon as its pieces exist, so from here on there is one
+         * teardown and one only -- the `catch` below calls exactly what the
+         * caller would. It replaces `disposeAsync` on the DIVE itself, which is
+         * the object handed back.
+         */
+        const originalDispose = dive.disposeAsync.bind(dive);
+        dive.disposeAsync = async () => {
+            // before clear(), so a load in flight sees it and frees what it got
+            disposed = true;
+            generation++;
+
+            orbitController.dispose();
+            clear();
+
+            // dispose dive
+            await originalDispose();
+        };
+
+        const loadUri = async (uri: string): Promise<void> => {
+            if (state) clear();
+
+            if (!model) {
+                // a model is a node carrying mesh geometry
+                model = new DIVENode();
+                model.name = 'QuickViewModel';
+                model.addComponent(new ModelComponent());
+                dive.scene.root.add(model);
+            }
+
+            /**
+             * Held locally across the await. The shared `model` is what a later
+             * load or a disposal writes to, so reading it again afterwards is
+             * reading someone else's answer.
+             */
+            const node = model;
+
+            await node.requireComponent(ModelComponent).setFromURL(uri);
+
+            if (disposed) {
+                // it arrived after the view was thrown away, so nobody owns it
+                disposeComponents(node);
+                node.removeFromParent();
+
+                return;
+            }
+
+            node.dropIt();
+        };
+
+        const loadState = async (sceneData: StateData): Promise<void> => {
+            clear();
+
+            const instance = new (
+                await import('@shopwell-ag/dive/state')
+            ).State(dive, orbitController);
+            state = instance;
+
+            /**
+             * SET_STATE settles once every model is loaded, so there is nothing
+             * left to wait for
+             * a single broken asset is warned about rather than dropping the
+             * whole scene, so what made it in is what is in the scene
+             */
+            await instance.performAction('SET_STATE', sceneData);
+
+            if (disposed) {
+                instance.destroyInstance();
+                dive.scene.root.nodes.forEach(disposeNode);
+
+                return;
+            }
+        };
+
+        const load = (nextSource: string | StateData): Promise<void> => {
+            const ticket = ++generation;
+
+            const run = queue.then(() => {
+                // overtaken while it waited, or there is no view left to fill
+                if (ticket !== generation || disposed) return;
+
+                return typeof nextSource === 'string'
+                    ? loadUri(nextSource)
+                    : loadState(nextSource);
+            });
+
+            /**
+             * The caller gets `run` and therefore this load's own outcome, while
+             * the queue continues on a tail that never rejects -- a failed load
+             * must not block the next one.
+             */
+            queue = run.then(
+                () => {},
+                () => {},
+            );
+
+            return run;
+        };
+
+        /**
+         * Getters rather than fields, because `load` swaps what is there and
+         * `Object.assign` would have copied whatever was current at setup.
+         */
+        const quickView = Object.assign(dive, { orbitController, load });
+        Object.defineProperties(quickView, {
+            model: { get: () => model, enumerable: true },
+            state: { get: () => state, enumerable: true },
+        });
+
+        await load(source);
+
+        frame();
+
+        if (settings?.autoStart ?? true) {
+            await dive.startAsync();
+        }
+
+        return quickView as QuickView;
+    } catch (error) {
+        disposed = true;
+        // never in front of the error that brought us here
+        try {
+            await dive.disposeAsync();
+        } catch (failure) {
+            console.error('Failed to clean up a QuickView:', failure);
+        }
+
+        /**
+         * rethrown untouched, and not logged: the caller knows it asked for a
+         * QuickView, so "during initialization" adds nothing the error does not
+         * already say -- and a library that logs what it rethrows makes the same
+         * failure appear twice, in a channel the caller did not choose
+         */
+        throw error;
+    }
+}

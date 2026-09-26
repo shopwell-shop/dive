@@ -1,0 +1,689 @@
+/**
+ * @jest-environment jsdom
+ */
+
+import type { Mock } from 'vitest';
+import { vi } from 'vitest';
+import { DIVE, DIVENode, ModelComponent } from '@shopwell-ag/dive';
+import { OrbitController } from '@shopwell-ag/dive/orbitcontroller';
+import { State, type StateData } from '@shopwell-ag/dive/state';
+import { QuickView, QuickViewDefaultSettings } from '../QuickView.ts';
+
+/**
+ * Shared across instances, because QuickView replaces `disposeAsync` on the
+ * object it returns, which hides the original mock, and because the mesh
+ * component is created per call.
+ */
+const {
+    diveDisposeAsync,
+    diveStartAsync,
+    setFromURL,
+    statePerformAction,
+    stateDestroyInstance,
+    rootAdd,
+    rootNodes,
+    bounds,
+    cameraResize,
+    canvasLayout,
+} = vi.hoisted(() => ({
+    diveDisposeAsync: vi.fn(async () => {}),
+    diveStartAsync: vi.fn(async () => {}),
+    setFromURL: vi.fn(),
+    statePerformAction: vi.fn(async () => [] as object[]),
+    stateDestroyInstance: vi.fn(),
+    rootAdd: vi.fn(),
+    rootNodes: [] as unknown[],
+    // whether the thing being framed has any geometry to frame
+    bounds: { isEmpty: false },
+    cameraResize: vi.fn(),
+    // what a laid-out canvas reports; zero stands for one not mounted yet
+    canvasLayout: { clientWidth: 800, clientHeight: 600 },
+}));
+
+vi.mock('@shopwell-ag/dive', () => {
+    return {
+        DIVE: vi.fn(function () {
+            return {
+                mainView: {
+                    canvas: canvasLayout,
+                    // the controller drives the component, not the camera
+                    cameraComponent: {
+                        owner: { position: { set: vi.fn() } },
+                        onResize: cameraResize,
+                    },
+                },
+                scene: {
+                    root: {
+                        add: rootAdd,
+                        get nodes() {
+                            return rootNodes;
+                        },
+                    },
+                },
+                clock: { addTicker: vi.fn() },
+                startAsync: diveStartAsync,
+                disposeAsync: diveDisposeAsync,
+            };
+        }),
+        DIVEDefaultSettings: { displayGrid: false },
+        BoundingBox: vi.fn(function (this: Record<string, unknown>) {
+            this.enclose = vi.fn(() => this);
+            Object.defineProperty(this, 'isEmpty', {
+                get: () => bounds.isEmpty,
+            });
+            return this;
+        }),
+        // the real one, so the teardown assertions below exercise it
+        disposeComponents: (object: { components?: { dispose(): void }[] }) =>
+            object.components?.forEach((component) => component.dispose()),
+        DIVENode: vi.fn(function (this: Record<string, unknown>) {
+            const mesh = { setFromURL, dispose: vi.fn() };
+            this.components = [mesh];
+            this.dropIt = vi.fn();
+            this.addComponent = vi.fn(() => mesh);
+            this.requireComponent = vi.fn(() => mesh);
+            this.removeFromParent = vi.fn();
+            this.traverse = vi.fn((callback: (o: unknown) => void) =>
+                callback(this),
+            );
+            this.isDIVENode = true;
+            return this;
+        }),
+        ModelComponent: vi.fn(),
+    };
+});
+
+vi.mock('@shopwell-ag/dive/orbitcontroller', () => {
+    return {
+        OrbitController: vi.fn(function () {
+            return { focusObject: vi.fn(), dispose: vi.fn() };
+        }),
+    };
+});
+
+vi.mock('@shopwell-ag/dive/state', () => {
+    return {
+        State: vi.fn(function () {
+            return {
+                performAction: statePerformAction,
+                subscribe: vi.fn(),
+                destroyInstance: stateDestroyInstance,
+            };
+        }),
+    };
+});
+
+const sceneData = { name: 'scene' } as unknown as StateData;
+
+/** A scene object as SET_STATE hands it back. Nothing reads its shape. */
+const aLight = { name: 'a-light', isDIVELight: true };
+
+describe('QuickView', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        rootNodes.length = 0;
+        bounds.isEmpty = false;
+        Object.assign(canvasLayout, { clientWidth: 800, clientHeight: 600 });
+        setFromURL.mockImplementation(async () => {});
+        diveStartAsync.mockImplementation(async () => {});
+        statePerformAction.mockImplementation(async () => []);
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+    });
+
+    it('exposes the DIVE defaults as QuickView defaults', () => {
+        expect(QuickViewDefaultSettings).toMatchObject({ displayGrid: false });
+    });
+
+    it('should build the scene without auto start and start it afterwards', async () => {
+        // the model has to be in the scene before the viewport is framed
+        const quickView = await QuickView('test_uri');
+
+        expect(DIVE).toHaveBeenCalledWith({ autoStart: false });
+        expect(quickView.startAsync).toHaveBeenCalledTimes(1);
+    });
+
+    it('should forward the settings but keep auto start disabled', async () => {
+        await QuickView('test_uri', { displayGrid: true, autoStart: true });
+
+        expect(DIVE).toHaveBeenCalledWith({
+            displayGrid: true,
+            autoStart: false,
+        });
+    });
+
+    it('should register the orbit controller as a ticker', async () => {
+        const quickView = await QuickView('test_uri');
+
+        expect(quickView.clock.addTicker).toHaveBeenCalledWith(
+            quickView.orbitController,
+        );
+    });
+
+    it('should create an independent instance per call', async () => {
+        const first = await QuickView('first_uri');
+        const second = await QuickView('second_uri');
+
+        expect(first).not.toBe(second);
+        expect(DIVE).toHaveBeenCalledTimes(2);
+    });
+
+    describe('a failed setup', () => {
+        /**
+         * a DIVE registers itself in a global list when it is constructed and is
+         * only removed by its own dispose, so anything left behind eats an
+         * instance slot for good -- and may keep rendering
+         */
+        it('should take the engine down when the asset fails', async () => {
+            setFromURL.mockRejectedValueOnce(new Error('asset load failed'));
+
+            await expect(QuickView('broken.glb')).rejects.toThrow(
+                'asset load failed',
+            );
+
+            expect(diveDisposeAsync).toHaveBeenCalledTimes(1);
+        });
+
+        it('should take the controller down before the engine', async () => {
+            setFromURL.mockRejectedValueOnce(new Error('asset load failed'));
+
+            await expect(QuickView('broken.glb')).rejects.toThrow();
+
+            const controller = vi.mocked(OrbitController).mock.results[0]
+                .value as { dispose: Mock };
+            expect(controller.dispose).toHaveBeenCalledTimes(1);
+            expect(controller.dispose.mock.invocationCallOrder[0]).toBeLessThan(
+                diveDisposeAsync.mock.invocationCallOrder[0],
+            );
+        });
+
+        it('should take the engine down when the state fails', async () => {
+            statePerformAction.mockRejectedValueOnce(
+                new Error('SET_STATE failed'),
+            );
+
+            await expect(QuickView(sceneData)).rejects.toThrow(
+                'SET_STATE failed',
+            );
+
+            expect(stateDestroyInstance).toHaveBeenCalledTimes(1);
+            expect(diveDisposeAsync).toHaveBeenCalledTimes(1);
+        });
+
+        it('should take the engine down when it fails to start', async () => {
+            diveStartAsync.mockRejectedValueOnce(new Error('start failed'));
+
+            await expect(QuickView('test_uri')).rejects.toThrow('start failed');
+
+            expect(diveDisposeAsync).toHaveBeenCalledTimes(1);
+        });
+
+        it('should surface the original error when the cleanup fails too', async () => {
+            // a broken teardown must not replace the reason we are here
+            setFromURL.mockRejectedValueOnce(new Error('asset load failed'));
+            diveDisposeAsync.mockRejectedValueOnce(
+                new Error('teardown failed'),
+            );
+
+            await expect(QuickView('broken.glb')).rejects.toThrow(
+                'asset load failed',
+            );
+
+            expect(console.error).toHaveBeenCalledWith(
+                'Failed to clean up a QuickView:',
+                expect.objectContaining({ message: 'teardown failed' }),
+            );
+        });
+
+        it('should leave nothing behind when the model failed', async () => {
+            setFromURL.mockRejectedValueOnce(new Error('asset load failed'));
+
+            await expect(QuickView('broken.glb')).rejects.toThrow();
+
+            const node = vi.mocked(DIVENode).mock.results[0].value as {
+                components: { dispose: Mock }[];
+                removeFromParent: Mock;
+            };
+            expect(node.components[0].dispose).toHaveBeenCalled();
+            expect(node.removeFromParent).toHaveBeenCalled();
+        });
+    });
+
+    it('should reject when the DIVE instance cannot be created', async () => {
+        vi.mocked(DIVE).mockImplementationOnce(() => {
+            throw new Error('DIVE initialization error');
+        });
+
+        await expect(QuickView('test_uri')).rejects.toThrow(
+            'DIVE initialization error',
+        );
+    });
+
+    it('should not log what it rethrows', async () => {
+        // the caller chose the channel by catching, and would log it twice
+        vi.mocked(DIVE).mockImplementationOnce(() => {
+            throw new Error('DIVE initialization error');
+        });
+
+        await expect(QuickView('test_uri')).rejects.toThrow();
+
+        expect(console.error).not.toHaveBeenCalled();
+    });
+
+    describe('from a model uri', () => {
+        it('should load, ground and frame the model', async () => {
+            const quickView = await QuickView('test_uri');
+
+            expect(setFromURL).toHaveBeenCalledWith('test_uri');
+            expect(quickView.model!.dropIt).toHaveBeenCalledTimes(1);
+            expect(quickView.orbitController.focusObject).toHaveBeenCalledWith(
+                quickView.model,
+            );
+        });
+
+        it('should fit the camera to the canvas before framing it', async () => {
+            /**
+             * framing reads the aspect, and the one the camera is built with is
+             * a placeholder -- a portrait viewport would be framed too close
+             */
+            const quickView = await QuickView('test_uri');
+
+            expect(cameraResize).toHaveBeenCalledWith(800, 600);
+            expect(cameraResize.mock.invocationCallOrder[0]).toBeLessThan(
+                vi.mocked(quickView.orbitController.focusObject).mock
+                    .invocationCallOrder[0],
+            );
+        });
+
+        it('should keep the placeholder for a canvas that has no size yet', async () => {
+            // a canvas the consumer has yet to mount would give a NaN aspect
+            Object.assign(canvasLayout, { clientWidth: 0, clientHeight: 0 });
+
+            const quickView = await QuickView('test_uri');
+
+            expect(cameraResize).not.toHaveBeenCalled();
+            expect(quickView.orbitController.focusObject).toHaveBeenCalled();
+        });
+
+        it('should frame without waiting for the scene to run', async () => {
+            // the canvas answers the viewport question, so the start does not
+            const quickView = await QuickView('test_uri');
+
+            const focus = vi.mocked(quickView.orbitController.focusObject);
+            const start = vi.mocked(quickView.startAsync);
+            expect(focus.mock.invocationCallOrder[0]).toBeLessThan(
+                start.mock.invocationCallOrder[0],
+            );
+        });
+
+        it('should frame even when it was told not to start', async () => {
+            const quickView = await QuickView('test_uri', {
+                autoStart: false,
+            });
+
+            expect(quickView.orbitController.focusObject).toHaveBeenCalledWith(
+                quickView.model,
+            );
+        });
+
+        it('should not frame a model that loaded no geometry', async () => {
+            // the same geometric question, on the model path
+            bounds.isEmpty = true;
+
+            const quickView = await QuickView('empty.glb');
+
+            expect(
+                quickView.orbitController.focusObject,
+            ).not.toHaveBeenCalled();
+        });
+
+        it('should hold no state', async () => {
+            expect((await QuickView('test_uri')).state).toBeNull();
+        });
+    });
+
+    describe('from scene data', () => {
+        it('should apply the data through SET_STATE', async () => {
+            const quickView = await QuickView(sceneData);
+
+            expect(State).toHaveBeenCalledWith(
+                quickView,
+                quickView.orbitController,
+            );
+            expect(statePerformAction).toHaveBeenCalledWith(
+                'SET_STATE',
+                sceneData,
+            );
+        });
+
+        it('should frame whatever the state put in the scene', async () => {
+            /**
+             * the decision is geometric, so it does not matter what the entities
+             * are: the gateway gives a model its marker in `userData` and a
+             * primitive none at all, and an entity-kind test therefore never
+             * framed a real scene
+             */
+            statePerformAction.mockResolvedValue([
+                { name: 'DIVEModel', userData: { isDIVEModel: true } },
+            ]);
+
+            const quickView = await QuickView(sceneData);
+
+            expect(quickView.orbitController.focusObject).toHaveBeenCalledWith(
+                quickView.scene.root,
+            );
+        });
+
+        it('should not frame a scene with no geometry in it', async () => {
+            /**
+             * an empty scene measures to a negative radius, which would put the
+             * camera behind its own target
+             */
+            bounds.isEmpty = true;
+            statePerformAction.mockResolvedValue([aLight]);
+
+            const quickView = await QuickView(sceneData);
+
+            expect(
+                quickView.orbitController.focusObject,
+            ).not.toHaveBeenCalled();
+        });
+
+        it('should still start a scene it cannot frame', async () => {
+            const quickView = await QuickView(sceneData);
+
+            expect(quickView.startAsync).toHaveBeenCalledTimes(1);
+        });
+
+        it('should hold no single model, because a state describes many', async () => {
+            expect((await QuickView(sceneData)).model).toBeNull();
+        });
+
+        it('should reject when applying the state fails', async () => {
+            statePerformAction.mockRejectedValueOnce(
+                new Error('SET_STATE failed'),
+            );
+
+            await expect(QuickView(sceneData)).rejects.toThrow(
+                'SET_STATE failed',
+            );
+        });
+    });
+
+    describe('load', () => {
+        /** A started QuickView with the setup calls already accounted for. */
+        const started = async (source: string | StateData = 'first_uri') => {
+            const quickView = await QuickView(source);
+            vi.mocked(setFromURL).mockClear();
+            vi.mocked(statePerformAction).mockClear();
+            vi.mocked(stateDestroyInstance).mockClear();
+            vi.mocked(quickView.orbitController.focusObject).mockClear();
+
+            return quickView;
+        };
+
+        it('should swap the model and stand it up', async () => {
+            // the two calls every consumer wrote by hand, as one
+            const quickView = await started();
+
+            await quickView.load('second_uri');
+
+            expect(setFromURL).toHaveBeenCalledWith('second_uri');
+            expect(quickView.model!.dropIt).toHaveBeenCalled();
+        });
+
+        it('should leave the camera to the caller', async () => {
+            /**
+             * framing reads the viewport, which only has a size once the view
+             * runs -- a load cannot know whether that already happened, so it
+             * never moves the camera on its own
+             */
+            const quickView = await started();
+
+            await quickView.load('second_uri');
+
+            expect(
+                quickView.orbitController.focusObject,
+            ).not.toHaveBeenCalled();
+        });
+
+        it('should leave the camera to the caller for a state too', async () => {
+            const quickView = await started();
+
+            await quickView.load(sceneData);
+
+            expect(
+                quickView.orbitController.focusObject,
+            ).not.toHaveBeenCalled();
+        });
+
+        it('should reuse the node it already has for another model', async () => {
+            // the node is the entity; swapping the asset must not replace it
+            const quickView = await started();
+            const node = quickView.model;
+
+            await quickView.load('second_uri');
+
+            expect(quickView.model).toBe(node);
+            expect(DIVENode).toHaveBeenCalledTimes(1);
+        });
+
+        it('should settle only once the asset is in the scene', async () => {
+            // awaited, so a caller can rebuild UI that depends on the geometry
+            const quickView = await started();
+            let loaded = false;
+            vi.mocked(setFromURL).mockImplementationOnce(async () => {
+                await Promise.resolve();
+                loaded = true;
+            });
+
+            await quickView.load('second_uri');
+
+            expect(loaded).toBe(true);
+        });
+
+        it('should let a failed load through to the caller', async () => {
+            const quickView = await started();
+            vi.mocked(setFromURL).mockRejectedValueOnce(
+                new Error('asset load failed'),
+            );
+
+            await expect(quickView.load('broken_uri')).rejects.toThrow(
+                'asset load failed',
+            );
+        });
+
+        describe('two loads at once', () => {
+            /** A load that only settles when the returned resolver is called. */
+            const suspend = () => {
+                let release: () => void = () => {};
+                const gate = new Promise<void>((resolve) => {
+                    release = resolve;
+                });
+                setFromURL.mockImplementationOnce(async () => {
+                    await gate;
+                });
+
+                return release;
+            };
+
+            it('should not touch a model a newer load already took away', async () => {
+                const quickView = await started();
+                const release = suspend();
+
+                const slow = quickView.load('slow_uri');
+                await quickView.load(sceneData);
+                release();
+
+                await expect(slow).resolves.toBeUndefined();
+                expect(quickView.model).toBeNull();
+                expect(quickView.state).not.toBeNull();
+            });
+
+            it('should let the newest source win', async () => {
+                const quickView = await started();
+                const release = suspend();
+
+                const slow = quickView.load('slow_uri');
+                const fast = quickView.load('fast_uri');
+                release();
+                await Promise.all([slow, fast]);
+
+                expect(setFromURL).toHaveBeenLastCalledWith('fast_uri');
+            });
+
+            it('should skip a load that was superseded before it ran', async () => {
+                // three in flight, only the newest is worth doing
+                const quickView = await started();
+                const release = suspend();
+
+                const first = quickView.load('first_uri');
+                const second = quickView.load('second_uri');
+                const third = quickView.load('third_uri');
+                release();
+                await Promise.all([first, second, third]);
+
+                expect(setFromURL).not.toHaveBeenCalledWith('second_uri');
+                expect(setFromURL).toHaveBeenLastCalledWith('third_uri');
+            });
+
+            it('should drop a queued load once the view is disposed', async () => {
+                // rejected at the queue, so the asset is never fetched at all
+                const quickView = await started();
+                const release = suspend();
+
+                const slow = quickView.load('slow_uri');
+                await quickView.disposeAsync();
+                release();
+                await slow;
+
+                expect(setFromURL).not.toHaveBeenCalled();
+                expect(quickView.model).toBeNull();
+            });
+
+            it('should free a model that arrives after disposal', async () => {
+                /**
+                 * the asset was already in flight, so it lands in a node nobody
+                 * owns any more -- and its geometry has to be freed there
+                 */
+                const quickView = await started();
+                const release = suspend();
+
+                const slow = quickView.load('slow_uri');
+                await vi.waitFor(() =>
+                    expect(setFromURL).toHaveBeenCalledWith('slow_uri'),
+                );
+                const node = quickView.model!;
+                const freed = vi.mocked(node.components[0].dispose);
+                freed.mockClear();
+
+                await quickView.disposeAsync();
+                release();
+                await slow;
+
+                expect(freed).toHaveBeenCalled();
+                expect(node.removeFromParent).toHaveBeenCalled();
+            });
+
+            it('should free scene state that arrives after disposal', async () => {
+                const quickView = await started();
+                let release: () => void = () => {};
+                const gate = new Promise<void>((resolve) => {
+                    release = resolve;
+                });
+                statePerformAction.mockImplementationOnce(async () => {
+                    await gate;
+                    return [];
+                });
+
+                const slow = quickView.load(sceneData);
+                await vi.waitFor(() =>
+                    expect(statePerformAction).toHaveBeenCalled(),
+                );
+
+                await quickView.disposeAsync();
+                stateDestroyInstance.mockClear();
+                release();
+                await slow;
+
+                expect(stateDestroyInstance).toHaveBeenCalledTimes(1);
+                expect(quickView.state).toBeNull();
+            });
+        });
+
+        it('should apply scene data to a view built from a uri', async () => {
+            const quickView = await started();
+            const node = quickView.model!;
+
+            await quickView.load(sceneData);
+
+            expect(statePerformAction).toHaveBeenCalledWith(
+                'SET_STATE',
+                sceneData,
+            );
+            expect(quickView.state).not.toBeNull();
+            // the model it replaced is gone, and its geometry with it
+            expect(quickView.model).toBeNull();
+            expect(node.components[0].dispose).toHaveBeenCalled();
+            expect(node.removeFromParent).toHaveBeenCalled();
+        });
+
+        it('should load a model into a view built from scene data', async () => {
+            const quickView = await started(sceneData);
+            const entity = new DIVENode();
+            rootNodes.push(entity);
+
+            await quickView.load('a_uri');
+
+            expect(setFromURL).toHaveBeenCalledWith('a_uri');
+            expect(quickView.model).not.toBeNull();
+            expect(quickView.state).toBeNull();
+            // the state instance and everything it put in the scene are gone
+            expect(stateDestroyInstance).toHaveBeenCalledTimes(1);
+            expect(entity.components[0].dispose).toHaveBeenCalled();
+        });
+
+        it('should replace one scene state with another', async () => {
+            const quickView = await started(sceneData);
+
+            await quickView.load(sceneData);
+
+            expect(stateDestroyInstance).toHaveBeenCalledTimes(1);
+            expect(State).toHaveBeenCalledTimes(2);
+        });
+    });
+
+    describe('disposal', () => {
+        it('should dispose the orbit controller before the wrapped DIVE', async () => {
+            const quickView = await QuickView('test_uri');
+
+            await quickView.disposeAsync();
+
+            const controllerDispose = vi.mocked(
+                quickView.orbitController.dispose,
+            );
+            expect(controllerDispose).toHaveBeenCalledTimes(1);
+            expect(diveDisposeAsync).toHaveBeenCalledTimes(1);
+            expect(controllerDispose.mock.invocationCallOrder[0]).toBeLessThan(
+                diveDisposeAsync.mock.invocationCallOrder[0],
+            );
+        });
+
+        it('should free the model it loaded', async () => {
+            const quickView = await QuickView('test_uri');
+            const node = quickView.model!;
+
+            await quickView.disposeAsync();
+
+            expect(node.components[0].dispose).toHaveBeenCalled();
+        });
+
+        it('should remove the State instance from the registry', async () => {
+            // otherwise it lingers in State's static registry
+            const quickView = await QuickView(sceneData);
+
+            await quickView.disposeAsync();
+
+            expect(stateDestroyInstance).toHaveBeenCalledTimes(1);
+        });
+    });
+});

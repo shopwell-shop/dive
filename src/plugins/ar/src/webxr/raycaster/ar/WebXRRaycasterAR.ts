@@ -1,0 +1,104 @@
+import { Matrix4, Vector3 } from 'three/webgpu';
+import { type DIVERenderer } from '../../../../../../engine/renderer/Renderer.ts';
+import { type DIVEHitResult } from '../WebXRRaycaster.ts';
+
+export class DIVEWebXRRaycasterAR {
+    private _session: XRSession;
+    private _renderer: DIVERenderer;
+
+    private _transientHitTestSource: XRTransientInputHitTestSource | undefined;
+    private _referenceSpaceBuffer: XRReferenceSpace | null = null;
+
+    private _requesting: boolean = false;
+    private _initialized: boolean = false;
+
+    private _hitMatrixBuffer: Matrix4;
+
+    constructor(session: XRSession, renderer: DIVERenderer) {
+        this._session = session;
+        this._renderer = renderer;
+
+        this._hitMatrixBuffer = new Matrix4();
+    }
+
+    public dispose(): void {
+        this._transientHitTestSource?.cancel();
+        this._transientHitTestSource = undefined;
+
+        this._initialized = false;
+    }
+
+    public async init(): Promise<this> {
+        if (!this._session) {
+            return Promise.reject(
+                new Error('DIVEWebXRRaycasterAR: no session set in init()'),
+            );
+        }
+
+        if (this._requesting) {
+            return Promise.reject(
+                new Error('DIVEWebXRRaycasterAR: already initializing'),
+            );
+        }
+
+        if (this._initialized) {
+            return Promise.reject(
+                new Error('DIVEWebXRRaycasterAR: already initialized'),
+            );
+        }
+
+        this._requesting = true;
+        this._transientHitTestSource = await this._session
+            .requestHitTestSourceForTransientInput!({
+            profile: 'generic-touchscreen',
+        });
+        this._referenceSpaceBuffer =
+            this._renderer.webgpurenderer.xr.getReferenceSpace();
+        this._requesting = false;
+
+        if (!this._transientHitTestSource) {
+            return Promise.reject(
+                new Error(
+                    'DIVEWebXRRaycasterAR: the session returned no transient hit test source',
+                ),
+            );
+        }
+
+        this._initialized = true;
+
+        console.log('DIVEWebXRRaycasterAR: Initialized');
+
+        return Promise.resolve(this);
+    }
+
+    public getIntersections(frame: XRFrame): DIVEHitResult[] {
+        if (!this._transientHitTestSource) return [];
+
+        const touches = frame.getHitTestResultsForTransientInput(
+            this._transientHitTestSource,
+        );
+        if (touches.length === 0) return [];
+
+        const hits = touches.map((touch: XRTransientInputHitTestResult) => {
+            if (!this._referenceSpaceBuffer) return undefined;
+            if (!touch.results[0]) return undefined;
+            if (!touch.results[0].getPose) return undefined;
+
+            const pose = touch.results[0].getPose(this._referenceSpaceBuffer);
+            if (!pose) return undefined;
+
+            this._hitMatrixBuffer.fromArray(pose.transform.matrix);
+            const position = new Vector3().setFromMatrixPosition(
+                this._hitMatrixBuffer,
+            );
+
+            return {
+                point: position,
+                matrix: this._hitMatrixBuffer,
+                object: undefined,
+            };
+        });
+
+        return hits.filter((hit) => hit !== undefined) as DIVEHitResult[];
+    }
+}
