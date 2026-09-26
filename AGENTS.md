@@ -1,0 +1,110 @@
+# AGENTS.md
+
+## Learned User Preferences
+
+- Always respond in the language the user is writing in
+- Always update this `AGENTS.md` with new insights after code changes (workspace facts, patterns, preferences)
+- Always write `AGENTS.md` content in English
+
+## Learned Workspace Facts
+
+- Monorepo using yarn as package manager
+- Testing framework: vitest with coverage via `yarn coverage`
+- Global Vitest setup mocks were removed; tests now mock dependencies locally per file
+- Shared test mock modules like `src/test/mocks/three.ts` and `src/test/mocks/three-spritetext.ts` were removed; tests should inline only the mocks they actually need
+- Old global-mock cleanup can leave behind no-op local shims like `vi.mock('three', () => importActual('three'))`; remove them when a test does not override Three behavior
+- After the WebGPU import migration, tests must mock `three/webgpu` when the production module imports from `three/webgpu`; mocking `three` does not affect those modules
+- `TransformTool` must add and traverse `TransformControls.getHelper()`, not the `TransformControls` instance itself, because current Three typings and runtime treat the control as non-`Object3D`
+- Local mocks for `three/examples/jsm/*` should use the exact runtime specifier including the `.js` suffix when the source import does
+- `ARQuickLook` tests must mock `@shopwell-ag/dive/assetloader` and `@shopwell-ag/dive/assetexporter` in addition to `AssetConverter`, because `new AssetLoader()` and `new AssetExporter()` are evaluated before the mocked `AssetConverter` constructor runs
+- `DIVEGizmo` tests should mock child gizmo classes as real `Object3D` instances with spied methods to avoid `THREE.Object3D.add` warnings from plain-object stand-ins
+- `DIVEPrimitive` tests are more stable with real `Box3` plus per-test spies on `Box3.prototype`/`Raycaster`, instead of mocking the full `three` module surface
+- `OrientationDisplayAxes` tests should locally stub `three-spritetext` because jsdom does not implement the canvas text context that the real package needs
+- `DIVERoot` should detach both legacy scene-level `TransformControls` objects and modern `TransformControlsRoot.controls` helper roots when cleaning up transform controls
+- `DIVERoot` CAMERA update/delete coverage requires manually seeding a matching `Object3D` in tests because `addSceneObject` intentionally skips creating CAMERA scene nodes
+- Plugins live in `src/plugins/<name>/` and are auto-discovered by looking for `index.ts` in subdirectories
+- Plugins are exported as subpath exports: `@shopwell-ag/dive/<plugin-name>` (e.g. `@shopwell-ag/dive/shader`, `@shopwell-ag/dive/state`)
+- The shader plugin (`src/plugins/shader/`) now exposes node-based building blocks like `GridNode` and `GridNodeUniforms`; legacy `DIVEShaderLib`/`DIVEShaderMaterial` shader-lib wrappers are being removed
+- `DIVEGrid` custom shader code must use TSL/node materials for WebGPU; plain `ShaderMaterial` triggers `THREE.NodeMaterial: Material "ShaderMaterial" is not compatible`
+- `DIVEGrid` owns its `MeshBasicNodeMaterial` setup and creates its grid uniform nodes locally; `GridNode` only provides the TSL output-node implementation
+- `DIVEGrid` component uses the shader plugin; it is imported transitively via `Scene` → `Grid` → `@shopwell-ag/dive/shader`
+- Shader plugin public docs must describe the new node-based API: `GridNode` plus `GridNodeUniforms`; legacy `DIVEShaderLib`/`DIVEShaderMaterial` docs are outdated
+- Tests that mock `@shopwell-ag/dive/shader` must provide a `GridNode` constructor stub after the shader plugin migration; legacy `DIVEShaderLib`-only mocks break transitive imports
+- Most tests do not need to mock `@shopwell-ag/dive/shader` at all; after the WebGPU migration the only current direct need is `src/components/grid/__test__/Grid.test.ts`, which asserts `DIVEGrid` constructs `GridNode`
+- When partially mocking `three/webgpu`, base the mock on `importOriginal<typeof import('three/webgpu')>()`; using `vi.importActual('three')` drops WebGPU-only exports like `Node` and breaks transitive shader imports
+- `DIVEGrid` tests or other `MeshBasicNodeMaterial` mocks must preserve the constructor `outputNode` param because production code passes `new GridNode(uniforms)` directly into material creation
+- `GridNode` unit tests are best written with local `three/tsl` and `three/webgpu` mocks plus `vi.hoisted(...)`; plain top-level mock helpers break because `vi.mock(...)` factories are hoisted
+- `GridNode` returns the final `vec4(...)` TSL node from its constructor while still naming the underlying base `Node` instance `GridNode`
+- In `GridNode` tests, keep a raw mock-uniform object separate from the `GridNodeUniforms` cast; casting too early hides Vitest `.mock` metadata from TypeScript
+- `DIVEEnvironment` no longer applies HDR state from the constructor alone; tests should wait for the async HDR load and call `env.init()` before asserting environment/background updates
+- `DIVEEnvironment` concurrent-load cleanup is best covered by spying on the private `loadHDRImage` method and resolving overlapping promises out of order; stale textures should be disposed
+- `DIVE` tests must mock `mainView.initAsync()` and `clock.startAsync()`; the current startup path no longer goes through `mainView.renderer.initialized` checks in the test double
+- On the v3 branch, deprecated compatibility APIs should not be kept alive just to satisfy tests; remove the matching legacy test coverage instead of restoring `DIVE.QuickView()`, `engine`, `createView()`, `disposeView()`, `AnimationSystem.animate()`, `Toolbox.useTool()`, `Toolbox.getActiveTool()`, or old environment no-op methods
+- `DIVERenderer` tests must mock `three/webgpu` `WebGPURenderer`; old `three` `WebGLRenderer` expectations are outdated
+- `DIVERenderer` stale-init behavior after `setCanvas()` is best tested with a deferred first `init()` promise; `init()` captures the current WebGPU renderer, skips `renderer.init()` when it is already initialized, and the old renderer must not trigger environment init after the swap
+- `MediaCreator` fallback coverage is easiest by overriding test canvas `width`/`height` to `undefined` and `writable: true`, then letting `drawCanvas()` fall back through `clientWidth` to the renderer canvas dimensions
+- `MediaCreator.drawCanvas()` must restore the previous WebGPU render target and camera layer mask before awaiting `readRenderTargetPixelsAsync()`; otherwise the live `View.tick()` render can keep drawing into the offscreen target and trigger `WebGPUTextureUtils: Texture already initialized.`
+- Demo fixture `/Users/f.frank/Public/Repos/dive-demo/public/model_reverse_animation_order_long_name_blank_name.glb` is used for animation edge cases; it contains a blank clip name, an overlong clip name, and a `Walk` clip that now hard-fails loading via an invalid animation accessor reference
+- `yarn build` can still exit successfully while `vite-plugin-dts` reports TypeScript API migration errors, so WebGPU refactors need explicit grep/type-review and not just a green build exit code
+- `DIVE.start()` is now a fire-and-forget wrapper around `startAsync()`, so tests that need renderer readiness should await `startAsync()` or a microtask before asserting downstream effects
+- `DIVE.disposeAsync()` must dispose the `DIVEClock` before tearing down views/renderers; `DIVE.startAsync()` now propagates init failures to callers instead of swallowing them, so tests should use `await expect(dive.startAsync()).rejects...` for renderer-init failure paths
+- Demo views in `/Users/f.frank/Public/Repos/dive-demo/src/views/` that create `QuickView` instances should dispose them via `disposeAsync()` in `onUnmounted`; missing route-leave cleanup leaves old WebGPU render loops alive across example switches
+- Deprecated `BaseTool` coverage was removed entirely; if `src/plugins/toolbox/src/BaseTool.ts` is gone in a future major, delete the legacy suite instead of recreating the class for tests
+- `MediaCreator` screenshot generation is async under WebGPU and uses `RenderTarget` plus `readRenderTargetPixelsAsync`; it no longer swaps `renderer.domElement`
+- `DIVEXRLightRoot` currently guards `XREstimatedLight` off under WebGPU and falls back to the existing scene light until a dedicated WebGPU-compatible light-estimation path exists
+- Library builds must externalize `three` with a pattern that also matches subpaths like `three/webgpu`, `three/tsl`, and `three/examples/jsm/*`; externalizing only bare `three` bundles a second Three runtime into `build/` and triggers `THREE.WARNING: Multiple instances of Three.js being imported.` in consumers
+- State action migrations must use `AnimationSystem.fromTargets(...).play()` and `Toolbox.enableTool()`; lingering `animate()` or `useTool()` calls can still let `yarn build` exit 0 while `vite-plugin-dts` reports TS2339 API drift
+- When swapping canvases under WebGPU, `DIVEEnvironment.setRenderer()` must run before disposing the previous `WebGPURenderer`; disposing the old renderer first can crash `PMREMGenerator.dispose()` inside Three's `NodeManager.delete` with `usedTimes` access errors
+- `OrientationDisplay.tick()` should size its overlay viewport from `DIVERenderer.canvas.clientHeight` and restore the prior `webgpurenderer.autoClear` value; unit tests can fall back to the saved viewport height when the mock omits `canvas`
+- `OrientationDisplay.tick()` now no-ops until `webgpurenderer.initialized` is true, so `OrientationDisplay.test.ts` render-path cases must seed the renderer mock with `initialized: true` and only the guard test should flip it to `false`
+- Neighboring `dive-demo` local verification can use a `node_modules/@shopwell-ag/dive` symlink to this repo when `yalc` is absent, as long as this repo's `build/` artifacts are present
+- The `dive-demo` orientation display example now uses a single `QuickView` canvas with `displayAxes: true`; the previous side-by-side comparison against a manually wired `OrientationDisplay` plugin is no longer the expected snapshot shape
+- `dive-demo` Vue view files should not contain artificial stabilization waits such as fixed `setTimeout` sleeps or presentation-frame `requestAnimationFrame` delays just to make E2E tests pass; route readiness should reflect actual frontend state after `QuickView`/feature initialization
+- `dive-demo` canvas-switch flows should rely on Vue's `nextTick()` to commit active-panel state before calling `mainView.setCanvas(...)`; do not add an extra animation-frame sleep in the view
+- `dive-demo`'s `createStableQuickView()` helper must mirror the current `QuickView` contract: construct `DIVE` with `autoStart: false`, override `disposeAsync()` instead of `dispose()`, and call `startAsync()` only after the model and orbit controller are wired; otherwise routes like `DiveSwitchCanvas` never become ready after the v3 async-start API change
+- `DIVECanvasLifecycleManager` in `src/engine/canvas/` is again the single owner of canvas readiness state: it keeps the waiter promises, resolves `waitForHealthyCanvas()`, and advances readiness via its own `tick()`
+- `DIVECanvasLifecycleManager.tick()` must early-return while the current canvas remains valid; only invalid, detached, or freshly swapped canvases should re-enter the two-sample stabilization path
+- `DIVECanvasLifecycleManager.tick()` should stay as a shallow entrypoint that does the dispose guard and then delegates the actual lifecycle progression to the private `_checkCanvasHealth()` helper for readability
+- `DIVEView.tick()` should always call `DIVECanvasLifecycleManager.tick()` before honoring the paused/render path so canvas readiness can continue progressing even while rendering is paused
+- `DIVECanvasLifecycleManager` keeps its layout/readiness helpers as private member methods instead of top-level module helpers, so the canvas lifecycle logic stays co-located inside the class
+- `DIVEView.initAsync()`, `DIVERenderer.init()`, and `DIVEEnvironment.init()` should stay `async` and explicitly `await` their cached `_initPromise` values; this repo prefers the consistent async method shape over collapsing those branches to direct promise returns
+- `DIVECanvasLifecycleManager.waitForHealthyCanvas()` can take an optional `AbortSignal`; aborting resolves only that individual waiter with `null`, while the CLM's shared readiness state keeps progressing through later `tick()` calls
+- `DIVEView` now uses an internal `AbortController` to invalidate pending init work on `dispose()` and `setCanvas()`; even with abort support, `renderer !== this._renderer` remains as the stale-renderer guard after awaited renderer initialization
+- `DIVERenderer` no longer owns DOM/canvas readiness logic; it only initializes WebGPU/environment state, swaps canvases, and handles render/resize calls
+- The old `DIVEResizeManager` compatibility layer has been removed entirely on v3; canvas ownership now lives directly between `DIVEView` and `DIVECanvasLifecycleManager`
+- `DIVEView.setCanvas()` must not force an immediate `onResize()` on the swapped canvas; the `DIVECanvasLifecycleManager` is the single source of truth for resize propagation
+- `DIVECanvasLifecycleManager.setCanvas()` must reset its cached width/height so an equally sized replacement canvas still emits the initial resize sync for the new renderer/camera pair
+- In `DIVECanvasLifecycleManager`, keep raw measurement in `_getCanvasLayout()` and the valid-layout fast path inside `waitForHealthyCanvas()`/`tick()`; there is no longer a separate public readiness accessor
+- `DIVEView` should pass a named `_handleCanvasResize` callback into `DIVECanvasLifecycleManager` instead of an inline lambda, so the renderer/camera resize orchestration stays explicit while the CLM remains decoupled
+- `DIVEView` invalidation branches after async init are best covered by disposing the view while `renderer.init()` is still pending and by invoking the `DIVECanvasLifecycleManager` resize callback directly to assert the `onResize` + immediate render path
+- In `View.test.ts`, dispose-while-renderer-init coverage must wait for the renderer init mock to be called before invoking `view.dispose()`; otherwise the test exercises the earlier canvas-wait abort boundary and `initAsync()` rejects with `DIVEView initialization aborted`
+- The first `DIVEView.initAsync()` aborted-signal guard is only reachable in tests by temporarily stubbing `globalThis.AbortController` to return an already-aborted signal, because `DIVEAbortablePromise` starts its executor immediately with a fresh controller
+- Patch coverage for `AssetLoader` extensionless type detection is best covered with cached chunks that expose either `arrayBuffer` or `promise`, so `_detectFileTypeFromContent()` and the later cache parse path use the same bytes without depending on real `AssetCache.create()` side effects
+- `Chunk._getHeader()` is currently private and not used by `load()`; missing-line coverage for it requires direct bracket access in `Chunk.test.ts` unless production code starts using the helper
+- `DIVE` idempotent `startAsync()`/`disposeAsync()` coverage should construct with `autoStart: false` before disposing, so fire-and-forget startup does not affect call-count assertions
+- `DIVEView` should render resize callbacks via `renderer.tick()` and keep a short requestAnimationFrame settle loop alive while resize events are still arriving; a single deprecated `renderer.render()` call is not enough to keep WebGPU output visually current during live panel/window drags
+- `DIVEView`'s live-resize settle loop uses `window.requestAnimationFrame`/`window.cancelAnimationFrame`; `View.test.ts` should spy on the window-scoped RAF APIs rather than only stubbing globals
+- `DIVECanvasLifecycleManager` keeps one steady-state `ResizeObserver` on the current `canvas.parentElement`; parent-driven layout changes are authoritative and the canvas itself should not be observed as a resize target
+- `DIVEView` does not inject the clock into `DIVECanvasLifecycleManager`; only `DIVEView` itself is a `DIVETicker`, and the current `DIVE.startAsync()` sequence awaits `clock.startAsync()` before `mainView.initAsync()`, so `Dive.test.ts` should expect the clock to start even while view init is still pending or later rejects
+- `DIVECanvasLifecycleManager` coverage is easiest to keep at 100% with explicit `tick()` advancement in tests, observer invalidation cases, and signal-based waiter success/stale-resolution assertions
+- In `View.test.ts`, the `waitForHealthyCanvas` mock should be explicitly typed as `Promise<DIVECanvasLayout | null>`; otherwise the stale `null` path triggers a TypeScript error on `mockResolvedValue(null)`
+- `DIVECanvasLifecycleManager` now keeps its shared waiter state under `_healthyCanvasPromise` and `_resolveHealthyCanvas` so the promise naming matches the canvas-health narrative
+- In `Dive.test.ts`, `mainView.initAsync` is typed as a plain async method, so tests should narrow it with `vi.mocked(...)` before calling mock-only helpers like `mockRejectedValueOnce` or `mockImplementationOnce`
+- Full focused coverage for `CanvasLifecycleManager.ts` now needs explicit tests for parentless bootstrap polling, renderable-to-zero resets during stabilization, same-size canvas swaps, waiter-only aborts, and the private direct-layout fallback after bootstrap completion
+- Focused single-file coverage in this repo should use `vitest --coverage.include=<path>`; running one suite with the default global `src/**/*` coverage scope still enforces repo-wide thresholds and will fail even when the targeted file itself is at 100%
+- `dive-demo` now has a dedicated `/asset-loader-diagnostics` route plus a Chromium-only Playwright spec to isolate `Chunk.load()` and `GLTFLoader.parseAsync()` without the surrounding `QuickView`/view lifecycle
+- `dive-demo` `DiveOD` screenshots should wait for an explicit view-level ready signal after `QuickView('sofa_B.glb', { displayAxes: true })` resolves; do not delay the view-level ready signal with artificial presentation-frame waits
+- `dive-demo` should lazy-load Monaco only when the code panel is opened; keep `src/monaco.ts` imported from the async `CodeEditor` chunk instead of from `src/main.ts`, and do not mount `CodeEditor` while the panel is closed
+- `dive-demo` `DiveClipAnimation.vue` should import `AnimationSystem` with the route chunk, like `DiveTargetAnimation.vue`; dynamically importing `@shopwell-ag/dive/animation` after `QuickView` starts can stall badly under CI software rendering
+- `dive-demo` HDR environment readiness must remain blocked on the initial HDR image load because the view depends on the HDR image being applied; do not mark the HDR route ready before `applyHDR(selectedHDR.value)` completes
+- `dive-demo` HDR E2E specs need an extended ready timeout because `environment.setImageUrl(...)` can take around 80s under CI/software rendering; keep the route blocked on the real HDR load instead of weakening readiness semantics
+- `dive-demo`'s current `navigateToExample` helper is temporary debug scaffolding only; final E2E specs should not be built around a shared loading helper, and helper-side render waits should not substitute for real view readiness
+- `DIVECanvasLifecycleManager` must treat the parent element's layout as the authoritative size when present and must invalidate the healthy fast path when that parent size changes; relying only on the canvas box leaves WebGPU canvases stuck at stale inline sizes after window or panel resizes
+- `DIVECanvasLifecycleManager` coverage should explicitly exercise the `ResizeObserver` zero-size invalidation path and the dual `getBoundingClientRect` fallback where both parent and canvas rect APIs are unavailable and client sizes become the source of truth
+- For CI hangs around model loading, temporary debugging is most useful inside `src/plugins/assetloader/src/loader/AssetLoader.ts` with stage logs for file-type detection, cache branch selection, `chunk.load()`, and per-format parse start/finish; broad demo-route logs add much less signal
+- When `AssetLoader.load()` traces stop at `chunk-load-start`, the next targeted instrumentation point is `src/plugins/assetcache/src/chunk/Chunk.ts`; use structured `[Chunk.load]` logs around fetch resolution, `response.arrayBuffer()`, metadata updates, and promise resolution instead of dumping raw `Response` or `ArrayBuffer` objects
+- `Chunk.load()` now prefers `response.body.getReader()` over `response.arrayBuffer()` when a readable body stream is available, logging per-read progress (`reader-start`, `reader-chunk`, `reader-done`, `reader-complete`) and only falling back to `response.arrayBuffer()` when no stream reader exists
+- The custom `src/plugins/assetloader/src/draco/worker/DracoWorker.js` must stay aligned with the current Three `DRACOLoader` worker attribute payload: decoded attributes need `count`, `itemSize`, `array`, and `stride`, with 4-byte padding when required; missing `stride` creates `InterleavedBuffer` instances with `count: NaN`, which can make `QuickView`/`placeOnFloor()` move models to invalid positions.
+- `DIVEClock` now exposes `startAsync()` instead of a synchronous `start()` entrypoint; update clock tests and engine test doubles accordingly
+- `QuickView()` now always constructs `DIVE` with `autoStart: false`, installs a `disposeAsync()` wrapper that disposes the orbit controller before the engine instance, and only awaits `dive.startAsync()` when `settings.autoStart` is not explicitly `false`
+- Promise helpers live in `src/engine/promise/` subfolders: `abortable/AbortablePromise.ts` starts its executor immediately on construction, exposes an `AbortSignal`, and is directly awaitable/thenable with no `run()` API; `deferred/DeferredPromise.ts` is directly awaitable/thenable with manual external `resolve()`/`reject()` and no `.promise` getter

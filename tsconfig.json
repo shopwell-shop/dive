@@ -1,0 +1,51 @@
+{
+    "compilerOptions": {
+        "target": "esnext",
+        "module": "node16",
+        "moduleResolution": "node16",
+        "allowImportingTsExtensions": true,
+        "resolveJsonModule": true,
+        "noEmit": false,
+        "declaration": true,
+        "declarationDir": "./build/types",
+        "emitDeclarationOnly": true,
+        "esModuleInterop": true,
+        "allowSyntheticDefaultImports": true,
+        "forceConsistentCasingInFileNames": true,
+        "strict": true,
+        "skipLibCheck": true,
+        "types": ["vitest/globals"],
+        "baseUrl": ".",
+        "paths": {
+            "@shopwell-ag/dive": ["./src/index.ts"],
+            "@shopwell-ag/dive/animation": ["src/plugins/animation/index.ts"],
+            "@shopwell-ag/dive/ar": ["src/plugins/ar/index.ts"],
+            "@shopwell-ag/dive/assetconverter": [
+                "src/plugins/assetconverter/index.ts"
+            ],
+            "@shopwell-ag/dive/assetexporter": [
+                "src/plugins/assetexporter/index.ts"
+            ],
+            "@shopwell-ag/dive/assetloader": [
+                "src/plugins/assetloader/index.ts"
+            ],
+            "@shopwell-ag/dive/assetcache": ["src/plugins/assetcache/index.ts"],
+            "@shopwell-ag/dive/orientationdisplay": [
+                "src/plugins/orientationdisplay/index.ts"
+            ],
+            "@shopwell-ag/dive/mediacreator": [
+                "src/plugins/mediacreator/index.ts"
+            ],
+            "@shopwell-ag/dive/orbitcontroller": [
+                "src/plugins/orbitcontroller/index.ts"
+            ],
+            "@shopwell-ag/dive/quickview": ["src/plugins/quickview/index.ts"],
+            "@shopwell-ag/dive/shader": ["src/plugins/shader/index.ts"],
+            "@shopwell-ag/dive/state": ["src/plugins/state/index.ts"],
+            "@shopwell-ag/dive/systeminfo": ["src/plugins/systeminfo/index.ts"],
+            "@shopwell-ag/dive/toolbox": ["src/plugins/toolbox/index.ts"]
+        }
+    },
+    "include": ["src/**/*", "docs/**/*", "scripts/**/*.ts", "vite.config*.ts"],
+    "exclude": ["node_modules", "build"]
+}

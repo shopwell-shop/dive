@@ -1,0 +1,160 @@
+import { type EngineGateway } from '../../../EngineGateway.ts';
+import { DIVE, DIVESceneObject, DIVESelectable } from '@shopwell-ag/dive';
+import { type EntitySchema } from '../../../../types/index.ts';
+import { SelectObjectAction } from '../selectobject.ts';
+import { Object3D } from 'three/webgpu';
+import { Toolbox, SelectionState } from '@shopwell-ag/dive/toolbox';
+
+const mockSceneObject = {
+    attach: vi.fn(),
+    isSelectable: true,
+} as unknown as Object3D & DIVESelectable;
+
+const mockGateway = {
+    findEntity: vi.fn().mockReturnValue(mockSceneObject),
+} as unknown as EngineGateway;
+
+const mockSelectionState = {
+    select: vi.fn(),
+    deselect: vi.fn(),
+} as unknown as SelectionState;
+
+const mockGetToolbox = () => {
+    return Promise.resolve({
+        selectionState: mockSelectionState,
+    } as unknown as Toolbox);
+};
+
+const mockRegistered = new Map<string, EntitySchema>();
+
+describe('SelectObjectAction', () => {
+    beforeEach(() => {
+        mockRegistered.clear();
+        vi.clearAllMocks();
+    });
+
+    it('should select an object', async () => {
+        // Arrange
+        const testObject: EntitySchema = {
+            id: 'test-object',
+            name: 'Test Object',
+            entityType: 'primitive',
+            visible: true,
+            parentId: null,
+            position: { x: 0, y: 0, z: 0 },
+            rotation: { x: 0, y: 0, z: 0 },
+            scale: { x: 1, y: 1, z: 1 },
+            geometry: {
+                name: 'cube',
+                width: 1,
+                height: 1,
+                depth: 1,
+            },
+        };
+
+        mockRegistered.set(testObject.id, testObject);
+
+        // Act
+        const action = new SelectObjectAction(
+            { id: 'test-object' },
+            {
+                gateway: mockGateway,
+                getToolbox: mockGetToolbox,
+                registered: mockRegistered,
+            },
+        );
+        await action.execute();
+
+        // Assert
+        expect(mockSelectionState.select).toHaveBeenCalledWith(mockSceneObject);
+    });
+
+    it('should return false if object does not exist', async () => {
+        // Act
+        const action = new SelectObjectAction(
+            { id: 'non-existent-object' },
+            {
+                gateway: mockGateway,
+                getToolbox: mockGetToolbox,
+                registered: mockRegistered,
+            },
+        );
+        await expect(action.execute()).rejects.toThrow('Object not found.');
+    });
+
+    it('should return false if object is not found in scene', async () => {
+        // Arrange
+        const testObject: EntitySchema = {
+            id: 'test-object',
+            name: 'Test Object',
+            entityType: 'primitive',
+            visible: true,
+            parentId: null,
+            position: { x: 0, y: 0, z: 0 },
+            rotation: { x: 0, y: 0, z: 0 },
+            scale: { x: 1, y: 1, z: 1 },
+            geometry: {
+                name: 'cube',
+                width: 1,
+                height: 1,
+                depth: 1,
+            },
+        };
+
+        mockRegistered.set(testObject.id, testObject);
+        vi.mocked(mockGateway.findEntity).mockReturnValueOnce(undefined);
+
+        // Act
+        const action = new SelectObjectAction(
+            { id: 'test-object' },
+            {
+                gateway: mockGateway,
+                getToolbox: mockGetToolbox,
+                registered: mockRegistered,
+            },
+        );
+        await expect(action.execute()).rejects.toThrow(
+            'Object not found in scene.',
+        );
+    });
+
+    it('should return false if object is not selectable', async () => {
+        // Arrange
+        const testObject: EntitySchema = {
+            id: 'test-object',
+            name: 'Test Object',
+            entityType: 'primitive',
+            visible: true,
+            parentId: null,
+            position: { x: 0, y: 0, z: 0 },
+            rotation: { x: 0, y: 0, z: 0 },
+            scale: { x: 1, y: 1, z: 1 },
+            geometry: {
+                name: 'cube',
+                width: 1,
+                height: 1,
+                depth: 1,
+            },
+        };
+
+        mockRegistered.set(testObject.id, testObject);
+        vi.mocked(mockGateway.findEntity).mockReturnValueOnce(
+            {} as DIVESceneObject,
+        );
+
+        // Act
+        const action = new SelectObjectAction(
+            { id: 'test-object' },
+            {
+                gateway: mockGateway,
+                getToolbox: mockGetToolbox,
+                registered: mockRegistered,
+            },
+        );
+
+        // Assert
+        await expect(action.execute()).rejects.toThrow(
+            'Object is not selectable.',
+        );
+    });
+});

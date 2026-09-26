@@ -1,0 +1,35 @@
+import { Action } from '../action.ts';
+import { registerAction } from '../../ActionRegistry.ts';
+import { type ActionDependencies } from '../../../types/index.ts';
+import { type EntitySchema } from '../../../types/index.ts';
+
+export const DeselectObjectAction = Action.define<
+    Partial<EntitySchema> & { id: string },
+    Pick<ActionDependencies, 'gateway' | 'getToolbox' | 'registered'>,
+    Promise<void>
+>({
+    description: 'Deselects an existing object.',
+    execute: async (payload, { gateway, getToolbox, registered }) => {
+        const object = registered.get(payload.id);
+        if (!object) throw new Error('Object not found.');
+
+        const sceneObject = gateway.findEntity(object);
+        if (!sceneObject) throw new Error('Object not found in scene.');
+
+        if (!('isSelectable' in sceneObject))
+            throw new Error('Object is not selectable.');
+
+        const instance = await getToolbox();
+        // Use SelectionState to deselect
+        // TransformTool will automatically detach gizmo via selection change listener
+        instance.selectionState.deselect();
+    },
+});
+
+declare global {
+    interface ActionTypes {
+        DESELECT_OBJECT: typeof DeselectObjectAction;
+    }
+}
+
+registerAction<'DESELECT_OBJECT'>('DESELECT_OBJECT', DeselectObjectAction);

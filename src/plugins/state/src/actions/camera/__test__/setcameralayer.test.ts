@@ -1,0 +1,27 @@
+import { SetCameraLayerAction } from '../setcameralayer.ts';
+import { OrbitController } from '@shopwell-ag/dive/orbitcontroller';
+
+describe('SetCameraLayerAction', () => {
+    it('should set camera layer', async () => {
+        // Mock dependencies
+        const setCameraLayer = vi.fn();
+        const mockController = {
+            object: {
+                setCameraLayer,
+            },
+        } as unknown as OrbitController;
+
+        const action = new SetCameraLayerAction(
+            { layer: 'LIVE' },
+            {
+                controller: mockController,
+            },
+        );
+
+        // Execute action
+        action.execute();
+
+        // Verify results
+        expect(setCameraLayer).toHaveBeenCalledWith('LIVE');
+    });
+});
