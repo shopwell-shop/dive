@@ -1,18 +1,16 @@
 Shopwell Dive
 Copyright 2026 Shopwell
 
-This product includes software originally developed by Shopwell.
+This Shopwell project is licensed under the Apache License 2.0; see LICENSE.
 
-Shopwell is an independent product and is not affiliated with, endorsed
-by, or sponsored by any other party. All third-party product names and
-trademarks remain the property of their respective owners.
+This product includes software originally developed by Shopware.
+Upstream source: https://github.com/shopware/dive
 
-The upstream code included in this product is licensed under the MIT
-License. The full text of the upstream license is preserved verbatim
-below.
+The upstream code is licensed under the MIT License. The full original
+license text is preserved verbatim below.
 
 ==========================================================================
-Upstream License — Dive (MIT)
+Upstream License — shopware/dive LICENSE (MIT)
 ==========================================================================
 MIT License
 

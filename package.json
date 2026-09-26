@@ -102,7 +102,7 @@
         "url": "git+ssh://git@github.com/shopwell-shop/dive.git"
     },
     "author": "ffrank <f.frank@shopwell.cn>",
-    "license": "MIT",
+    "license": "Apache-2.0",
     "browserslist": [
         "> 1%, not dead, not ie 11, not op_mini all"
     ],
