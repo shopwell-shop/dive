@@ -144,3 +144,16 @@
 - A blur radius in meters has to be divided by the extent of the plane along each axis separately, or a wide shallow shadow comes out as an oval
 - `three` 0.185.1 ships only the WebGL `LightProbeGrid` (`extends Object3D`); the WebGPU one (`extends Light`, plus `tsl/lighting/LightProbeGridNode.js`) lands in 0.186.0. Worth knowing before anyone reaches for probes for contact shadows: the shading there comes from sky occlusion, and DIVE's default `useAsBackground: false` leaves the bake cameras looking at black, so there is nothing to occlude
 - `DIVENode.dropIt()` casts from the bottom centre of its own bounds, so the ray starts **on** the node's underside: a double-sided face there (glTF `doubleSided: true`) is hit at distance zero and the node rested on itself -- up by its own height, and further with every call. The hits are therefore filtered through `_contains()` (the node or anything below it)
+
+## Shopwell licensing guardrail
+
+- Shopwell-owned code and publishable subpackages use Apache License 2.0.
+- Project-owned package/composer manifests must declare `Apache-2.0`.
+- Registered project-owned `LICENSE` files contain the standard Apache-2.0 text.
+- Original upstream legal text is preserved verbatim in the root `NOTICE`; do not
+  brand, shorten, delete, or move it into `LICENSE.upstream-*` files.
+- Dependency lock files keep truthful third-party license metadata.
+- Before commit, push, release, or sync completion, run:
+  `../sync-upstream/bin/syncctl audit-license dive`.
+- If LICENSE, NOTICE, owned manifests, or upstream license inventory changes, update
+  `../sync-upstream/config/repos.json` in the same task. A failed audit blocks completion.
