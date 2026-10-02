@@ -4,7 +4,16 @@ on:
     push:
         branches:
             - trunk
-    workflow_dispatch: # manual trigger = publish a beta
+    workflow_dispatch:
+        inputs:
+            channel:
+                description: 'Release channel'
+                required: true
+                default: beta
+                type: choice
+                options:
+                    - beta
+                    - stable
 
 jobs:
     # ── Stable release (push to trunk) ────────────────────────────────
@@ -20,9 +29,9 @@ jobs:
         steps:
             - name: Mint scoped token via octo-sts
               id: sts-release
-              uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+              uses: shopwell-shop/octo-sts-action@c0ea7b858a7f5719ff14390f67dd770a2defd203
               with:
-                  scope: shopwell/dive
+                  scope: shopwell-shop/dive
                   identity: release
             - name: Run Release Please
               id: release
@@ -42,6 +51,9 @@ jobs:
     coverage:
         if: ${{ github.event_name == 'push' }}
         runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            id-token: write
         steps:
             - name: Checkout
               uses: actions/checkout@v4
@@ -64,7 +76,7 @@ jobs:
               uses: codecov/codecov-action@v5
               with:
                   files: ./coverage/coverage-final.json
-                  token: ${{ secrets.CODECOV_TOKEN }}
+                  use_oidc: true
                   fail_ci_if_error: true
 
     publish:
@@ -96,11 +108,97 @@ jobs:
             - name: Publish DIVE to npm
               run: npm publish --access public
 
+    # Stable recovery for a version already prepared in package.json but not
+    # published by Release Please. npm remains the publication source of truth.
+    publish-stable:
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.channel == 'stable' }}
+        runs-on: ubuntu-latest
+        permissions:
+            id-token: write # npm Trusted Publishing (OIDC)
+            contents: write # create the Shopwell tag and GitHub Release
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+            - name: Setup Node.js
+              uses: actions/setup-node@v6
+              with:
+                  node-version: '24'
+                  registry-url: 'https://registry.npmjs.org'
+            - name: Read stable release identity
+              id: release
+              shell: bash
+              run: |
+                  package_name=$(node -p "require('./package.json').name")
+                  version=$(node -p "require('./package.json').version")
+
+                  if [[ "$version" == *-* ]]; then
+                    echo "Stable recovery cannot publish prerelease version $version" >&2
+                    exit 1
+                  fi
+
+                  echo "package_name=$package_name" >> "$GITHUB_OUTPUT"
+                  echo "version=$version" >> "$GITHUB_OUTPUT"
+
+                  if npm view "$package_name@$version" version --json >/dev/null 2>&1; then
+                    echo "published=true" >> "$GITHUB_OUTPUT"
+                  else
+                    echo "published=false" >> "$GITHUB_OUTPUT"
+                  fi
+            - name: Search for cached dependencies
+              if: ${{ steps.release.outputs.published != 'true' }}
+              uses: actions/cache@v4
+              id: yarn-cache-stable
+              with:
+                  path: node_modules
+                  key: node-modules-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
+            - name: Install dependencies (if cache not found)
+              if: ${{ steps.release.outputs.published != 'true' && steps.yarn-cache-stable.outputs.cache-hit != 'true' }}
+              run: yarn
+            - name: Build DIVE
+              if: ${{ steps.release.outputs.published != 'true' }}
+              run: yarn build
+            - name: Publish DIVE to npm
+              if: ${{ steps.release.outputs.published != 'true' }}
+              run: npm publish --access public
+            - name: Verify npm publication
+              shell: bash
+              env:
+                  PACKAGE_NAME: ${{ steps.release.outputs.package_name }}
+                  VERSION: ${{ steps.release.outputs.version }}
+              run: |
+                  for _ in {1..12}; do
+                    published=$(npm view "$PACKAGE_NAME@$VERSION" version --json 2>/dev/null | tr -d '"' || true)
+                    if [[ "$published" == "$VERSION" ]]; then
+                      exit 0
+                    fi
+                    sleep 5
+                  done
+
+                  echo "$PACKAGE_NAME@$VERSION is not queryable from npm" >&2
+                  exit 1
+            - name: Create GitHub Release
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  VERSION: ${{ steps.release.outputs.version }}
+              run: |
+                  tag="v$VERSION"
+
+                  if gh release view "$tag" >/dev/null 2>&1; then
+                    exit 0
+                  fi
+
+                  if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+                    gh release create "$tag" --verify-tag --title "$tag" --generate-notes
+                  else
+                    gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --generate-notes
+                  fi
+
     # ── Beta release (manual dispatch) ────────────────────────────────
     # Kept in this same file so a single npm Trusted Publisher (this workflow)
     # authorizes both the stable and the beta publish.
     publish-beta:
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.channel == 'beta' }}
         runs-on: ubuntu-latest
         permissions:
             id-token: write # npm Trusted Publishing (OIDC)
@@ -144,7 +242,7 @@ jobs:
                     next_beta="$current_version-beta.$((last_beta + 1))"
                   fi
 
-                  echo "next_beta=$next_beta" >> $GITHUB_OUTPUT
+                  echo "next_beta=$next_beta" >> "$GITHUB_OUTPUT"
 
             - name: Update package.json with beta version
               run: |
