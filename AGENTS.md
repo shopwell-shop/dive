@@ -9,6 +9,7 @@
 ## Learned Workspace Facts
 
 - Monorepo using yarn as package manager
+- The Release workflow's manual `stable` channel is the recovery path for a stable version already prepared in `package.json` but missing from npm; it verifies the exact registry version before creating or repairing the matching GitHub Release.
 - Testing framework: vitest with coverage via `yarn coverage`
 - Global Vitest setup mocks were removed; tests now mock dependencies locally per file
 - Shared test mock modules like `src/test/mocks/three.ts` and `src/test/mocks/three-spritetext.ts` were removed; tests should inline only the mocks they actually need
