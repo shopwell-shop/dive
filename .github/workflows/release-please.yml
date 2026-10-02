@@ -159,6 +159,8 @@ jobs:
               run: yarn build
             - name: Publish DIVE to npm
               if: ${{ steps.release.outputs.published != 'true' }}
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
               run: npm publish --access public
             - name: Verify npm publication
               shell: bash
