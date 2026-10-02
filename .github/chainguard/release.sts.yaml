@@ -1,7 +1,7 @@
 issuer: https://token.actions.githubusercontent.com
-subject_pattern: repo:shopwell/dive:.*
+subject_pattern: repo:shopwell-shop/dive:.*
 claim_pattern:
-    workflow_ref: shopwell/dive/.github/workflows/release-please.yml@refs/heads/trunk
+    workflow_ref: shopwell-shop/dive/.github/workflows/release-please.yml@refs/heads/trunk
 
 permissions:
     contents: write

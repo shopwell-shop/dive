@@ -20,9 +20,9 @@ jobs:
         steps:
             - name: Mint scoped token via octo-sts
               id: sts-release
-              uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+              uses: shopwell-shop/octo-sts-action@c0ea7b858a7f5719ff14390f67dd770a2defd203
               with:
-                  scope: shopwell/dive
+                  scope: shopwell-shop/dive
                   identity: release
             - name: Run Release Please
               id: release
@@ -144,7 +144,7 @@ jobs:
                     next_beta="$current_version-beta.$((last_beta + 1))"
                   fi
 
-                  echo "next_beta=$next_beta" >> $GITHUB_OUTPUT
+                  echo "next_beta=$next_beta" >> "$GITHUB_OUTPUT"
 
             - name: Update package.json with beta version
               run: |
