@@ -139,6 +139,12 @@ jobs:
                   echo "package_name=$package_name" >> "$GITHUB_OUTPUT"
                   echo "version=$version" >> "$GITHUB_OUTPUT"
 
+                  if npm view "$package_name" version --json >/dev/null 2>&1; then
+                    echo "package_exists=true" >> "$GITHUB_OUTPUT"
+                  else
+                    echo "package_exists=false" >> "$GITHUB_OUTPUT"
+                  fi
+
                   if npm view "$package_name@$version" version --json >/dev/null 2>&1; then
                     echo "published=true" >> "$GITHUB_OUTPUT"
                   else
@@ -157,8 +163,11 @@ jobs:
             - name: Build DIVE
               if: ${{ steps.release.outputs.published != 'true' }}
               run: yarn build
-            - name: Publish DIVE to npm
-              if: ${{ steps.release.outputs.published != 'true' }}
+            - name: Publish DIVE to npm with Trusted Publishing
+              if: ${{ steps.release.outputs.published != 'true' && steps.release.outputs.package_exists == 'true' }}
+              run: npm publish --access public
+            - name: Publish initial DIVE package to npm
+              if: ${{ steps.release.outputs.published != 'true' && steps.release.outputs.package_exists != 'true' }}
               env:
                   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
               run: npm publish --access public
