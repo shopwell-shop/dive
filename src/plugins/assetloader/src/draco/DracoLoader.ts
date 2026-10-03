@@ -3,15 +3,16 @@ import { DRACOWorker } from './worker/DracoWorker.js';
 
 const DRACO_LOADER_REGISTRY = {
     LOAD_DRACO_JS_DECODER: async () =>
-        (await import('three/examples/jsm/libs/draco/draco_decoder.js?raw'))
-            .default,
+        (
+            await import('three/examples/jsm/libs/draco/gltf/draco_decoder.js?raw')
+        ).default,
     LOAD_DRACO_WASM_WRAPPER: async () =>
         (
-            await import('three/examples/jsm/libs/draco/draco_wasm_wrapper.js?raw')
+            await import('three/examples/jsm/libs/draco/gltf/draco_wasm_wrapper.js?raw')
         ).default,
     LOAD_DRACO_WASM_DECODER: async () => {
         const wasmURL = (
-            await import('three/examples/jsm/libs/draco/draco_decoder.wasm?url')
+            await import('three/examples/jsm/libs/draco/gltf/draco_decoder.wasm?url')
         ).default;
         const response = await fetch(wasmURL);
         return await response.arrayBuffer();
@@ -21,10 +22,8 @@ const DRACO_LOADER_REGISTRY = {
 export class DracoLoader extends DRACOLoader {
     protected decoderPending: Promise<void> | null = null;
     protected decoderConfig: {
-        type: 'js' | 'wasm';
         wasmBinary: ArrayBuffer | null;
     } = {
-        type: 'js',
         wasmBinary: null,
     };
     protected workerSourceURL: string = '';
@@ -32,8 +31,11 @@ export class DracoLoader extends DRACOLoader {
     protected async _initDecoder(): Promise<void> {
         if (this.decoderPending) return this.decoderPending;
 
-        const useJS =
-            typeof WebAssembly !== 'object' || this.decoderConfig.type === 'js';
+        /**
+         * WASM wherever the browser has it, JS only as the fallback -- the choice
+         * three makes on its own once `setDecoderConfig` is gone in r194
+         */
+        const useJS = typeof WebAssembly !== 'object';
 
         const librariesPending: Promise<string | ArrayBuffer>[] = [];
 

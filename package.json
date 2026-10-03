@@ -1,6 +1,6 @@
 {
     "name": "@shopwell-ag/dive",
-    "version": "4.0.2",
+    "version": "4.1.0",
     "description": "Shopwell Spatial Framework",
     "type": "module",
     "main": "build/dive.cjs",
