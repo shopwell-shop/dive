@@ -1,5 +1,27 @@
 # Changelog
 
+## [4.2.0](https://github.com/shopwell-shop/dive/compare/v4.1.0...v4.2.0) (2026-10-03)
+
+
+### 🚀 Features
+
+* align decoder asset loading ([003d7a3](https://github.com/shopwell-shop/dive/commit/003d7a3e432dfa863b464de52f8c295beb46782b))
+* choose decoder from platform support ([c3af9a7](https://github.com/shopwell-shop/dive/commit/c3af9a7c373fc6639c2b515b59b035ca59d400c6))
+
+
+### 🐛 Bug Fixes
+
+* bind release identity to immutable repository IDs ([3604daf](https://github.com/shopwell-shop/dive/commit/3604daf0b4c10c294a447fa3b514cf1fc4d88069))
+* **release:** authenticate initial npm publication ([0bfdee9](https://github.com/shopwell-shop/dive/commit/0bfdee9d4f88206fd6d39eae3e0d67f92d6eefde))
+* **release:** repair trusted publishing ([4a21817](https://github.com/shopwell-shop/dive/commit/4a21817e94adf4a37811a40640bd707897583039))
+* use trusted publishing for existing packages ([08c6d5b](https://github.com/shopwell-shop/dive/commit/08c6d5be9be9371499410f8ca88faa7927648235))
+* use trusted publishing for existing packages ([5857ca3](https://github.com/shopwell-shop/dive/commit/5857ca300cd0e260382990ab9c52b2bb85e90f82))
+
+
+### 📚 Documentation
+
+* add repository agent guardrails ([4ece5a9](https://github.com/shopwell-shop/dive/commit/4ece5a907ed69bf1d67cd4f4587f5ac26a015868))
+
 ## [4.1.0](https://github.com/shopwell-shop/dive/compare/v4.0.2...v4.1.0) (2026-10-02)
 
 
