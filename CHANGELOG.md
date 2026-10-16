@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.1.1](https://github.com/shopwell-shop/dive/compare/v4.1.0...v4.1.1) (2026-10-16)
+
+
+### 🐛 Bug Fixes
+
+* **ci:** publish the initial package with tokenless OIDC ([0998fc2](https://github.com/shopwell-shop/dive/commit/0998fc20ee2be276bcfdc8252e6f533f5db3f90b))
+* **ci:** publish with tokenless OIDC ([1c313f5](https://github.com/shopwell-shop/dive/commit/1c313f5c899fa957bcd9ec7fff74c08996933475))
+
 ## [4.1.0](https://github.com/shopwell-shop/dive/compare/v4.0.2...v4.1.0) (2026-10-02)
 
 
