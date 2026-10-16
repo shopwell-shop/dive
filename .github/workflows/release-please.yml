@@ -168,8 +168,8 @@ jobs:
               run: npm publish --access public
             - name: Publish initial DIVE package to npm
               if: ${{ steps.release.outputs.published != 'true' && steps.release.outputs.package_exists != 'true' }}
-              env:
-                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+              # Trusted Publishing also covers the first publication; the
+              # package needs a pending publisher configured on npm.
               run: npm publish --access public
             - name: Verify npm publication
               shell: bash
