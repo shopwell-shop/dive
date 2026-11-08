@@ -43,6 +43,9 @@
             "@shopwell-ag/dive/shader": ["src/plugins/shader/index.ts"],
             "@shopwell-ag/dive/state": ["src/plugins/state/index.ts"],
             "@shopwell-ag/dive/systeminfo": ["src/plugins/systeminfo/index.ts"],
+            "@shopwell-ag/dive/tiltcontroller": [
+                "src/plugins/tiltcontroller/index.ts"
+            ],
             "@shopwell-ag/dive/toolbox": ["src/plugins/toolbox/index.ts"]
         }
     },

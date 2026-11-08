@@ -13,7 +13,7 @@
         <img alt="dive: types" src="https://img.shields.io/npm/types/%40shopwell-ag%2Fdive">
     </a>
     <a href="#badge">
-        <img alt="dive: types" src="https://img.shields.io/codecov/c/github/shopwell/dive">
+        <img alt="dive: types" src="https://img.shields.io/codecov/c/github/shopwell-shop/dive">
     </a>
 </p>
 
@@ -128,6 +128,8 @@ For detailed information about the plugin system, see
 For detailed documentation, please refer to the following sections:
 
 - [Component System](docs/component-system.md) - Nodes, components, ticking and layers
+- [Image based light, background and dome](docs/environment.md) - Lighting from an image, what shows behind the scene, and a dome with a floor
+- [Input System](docs/input-system.md) - Input devices and the shared input format camera controllers listen to
 - [Plugin System](docs/plugin-system.md) - Detailed plugin system architecture and usage
 - [Shopwell Integration](docs/shopwell-integration.md) - Integration with Shopwell projects
 - [Testing and Quality Assurance](docs/testing.md) - Testing guidelines and best practices

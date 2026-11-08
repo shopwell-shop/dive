@@ -4,10 +4,17 @@ import {
     DIVEDefaultSettings,
     DIVENode,
     disposeComponents,
+    GyroInput,
     ModelComponent,
+    PointerInput,
+    SoftShadowComponent,
 } from '@shopwell-ag/dive';
 import { OrbitController } from '@shopwell-ag/dive/orbitcontroller';
 import type { State, StateData } from '@shopwell-ag/dive/state';
+import type {
+    TiltController,
+    TiltControllerPose,
+} from '@shopwell-ag/dive/tiltcontroller';
 import { type QuickViewSettings } from '../types/index.ts';
 
 /**
@@ -29,6 +36,28 @@ import { type QuickViewSettings } from '../types/index.ts';
 export type QuickView = DIVE & {
     orbitController: OrbitController;
 
+    /** Mouse and touch on the canvas, driving the {@link orbitController}. */
+    pointerInput: PointerInput;
+
+    /** Which controller moves the camera right now. */
+    readonly activeController: QuickViewController;
+
+    /**
+     * Hands the camera to another controller. Exactly one is active at a time.
+     *
+     * `'gyro'` turns the camera by how the device is tilted, around the pose the
+     * first load was framed in. It needs the orientation sensor, which iOS only
+     * grants from inside a user gesture -- call this straight from the click
+     * handler. It rejects, and the previous controller stays, when the sensor is
+     * refused or reports nothing.
+     *
+     * `'gyro'` is experimental, see `GyroInput` and `TiltController`: how it
+     * feels may change without a major release.
+     *
+     * @param kind - The controller to use.
+     */
+    useController: (kind: QuickViewController) => Promise<void>;
+
     /** The node the model sits on, or `null` while a scene state is loaded. */
     readonly model: DIVENode | null;
 
@@ -48,11 +77,15 @@ export type QuickView = DIVE & {
     load: (source: string | StateData) => Promise<void>;
 };
 
-export const QuickViewDefaultSettings: Omit<
-    Required<QuickViewSettings>,
-    'hdr'
-> = {
+/**
+ * The controllers a {@link QuickView} can hand its camera to. `'gyro'` is
+ * experimental.
+ */
+export type QuickViewController = 'orbit' | 'gyro';
+
+export const QuickViewDefaultSettings: Required<QuickViewSettings> = {
     ...DIVEDefaultSettings,
+    softShadow: false,
 };
 
 /** Frees the GPU resources of every component below a node, and unparents it. */
@@ -81,7 +114,11 @@ export async function QuickView(
      * list and is only removed by its own dispose, so one left behind eats an
      * instance slot for good -- and may leave a clock running.
      */
-    const dive = new DIVE({ ...settings, autoStart: false });
+    const {
+        softShadow = QuickViewDefaultSettings.softShadow,
+        ...diveSettings
+    } = settings ?? {};
+    const dive = new DIVE({ ...diveSettings, autoStart: false });
 
     try {
         /**
@@ -104,11 +141,33 @@ export async function QuickView(
             dive.mainView.cameraComponent.onResize(width, height);
         }
 
+        const pointerInput = new PointerInput(dive.mainView.canvas);
         const orbitController = new OrbitController(
             dive.mainView.cameraComponent,
-            dive.mainView.canvas,
         );
+        orbitController.connect(pointerInput);
         dive.clock.addTicker(orbitController);
+
+        let activeController: QuickViewController = 'orbit';
+
+        /**
+         * The front the gyro turns around: the pose of the first framing. Set
+         * before the view is handed out, so before anyone can switch.
+         */
+        let homePose: TiltControllerPose | null = null;
+
+        /** Built on the first switch to the gyro, so nobody else loads it. */
+        let gyro: { input: GyroInput; controller: TiltController } | null =
+            null;
+
+        const disposeGyro = (): void => {
+            if (!gyro) return;
+
+            dive.clock.removeTicker(gyro.controller);
+            gyro.controller.dispose();
+            gyro.input.dispose();
+            gyro = null;
+        };
 
         let model: DIVENode | null = null;
         let state: State | null = null;
@@ -171,6 +230,8 @@ export async function QuickView(
             generation++;
 
             orbitController.dispose();
+            pointerInput.dispose();
+            disposeGyro();
             clear();
 
             // dispose dive
@@ -185,6 +246,10 @@ export async function QuickView(
                 model = new DIVENode();
                 model.name = 'QuickViewModel';
                 model.addComponent(new ModelComponent());
+
+                // on the node, so it stays for the next model and re-bakes itself
+                if (softShadow) model.addComponent(new SoftShadowComponent());
+
                 dive.scene.root.add(model);
             }
 
@@ -257,19 +322,124 @@ export async function QuickView(
             return run;
         };
 
+        /** Serialized like {@link load}: a newer switch overtakes a waiting one. */
+        let switchGeneration = 0;
+        let switchQueue: Promise<void> = Promise.resolve();
+
+        const switchToGyro = async (
+            ticket: number,
+            permission: Promise<boolean>,
+        ): Promise<void> => {
+            if (!(await permission)) {
+                throw new Error(
+                    'QuickView: reading the device orientation was not permitted.',
+                );
+            }
+
+            if (!gyro) {
+                const { TiltController } =
+                    await import('@shopwell-ag/dive/tiltcontroller');
+
+                const input = new GyroInput();
+                const controller = new TiltController(
+                    dive.mainView.cameraComponent,
+                    { enabled: false },
+                );
+                controller.connect(input);
+                dive.clock.addTicker(controller);
+                gyro = { input, controller };
+            }
+
+            const { input, controller } = gyro;
+            controller.setHome(homePose!);
+
+            await input.enable();
+
+            // overtaken or thrown away while the sensor woke up
+            if (ticket !== switchGeneration || disposed) {
+                input.disable();
+                if (disposed) disposeGyro();
+
+                return;
+            }
+
+            orbitController.enabled = false;
+            controller.enabled = true;
+            activeController = 'gyro';
+        };
+
+        // only ever leaves the gyro, so there is one
+        const switchToOrbit = (): void => {
+            const { input, controller } = gyro!;
+            input.disable();
+            controller.enabled = false;
+
+            orbitController.enabled = true;
+            activeController = 'orbit';
+        };
+
+        const useController = (kind: QuickViewController): Promise<void> => {
+            const ticket = ++switchGeneration;
+
+            /**
+             * Asked before anything is awaited: iOS grants the sensor only while
+             * the user gesture that led here is still current. Caught here so a
+             * switch that gets overtaken leaves no unhandled rejection; awaiting
+             * it below still sees the failure.
+             */
+            const permission =
+                kind === 'gyro' ? GyroInput.requestPermission() : null;
+            permission?.catch(() => {});
+
+            const run = switchQueue.then(() => {
+                if (ticket !== switchGeneration || disposed) return;
+                if (kind === activeController) return;
+
+                return kind === 'gyro'
+                    ? switchToGyro(ticket, permission!)
+                    : switchToOrbit();
+            });
+
+            // a failed switch must not block the next one
+            switchQueue = run.then(
+                () => {},
+                () => {},
+            );
+
+            return run;
+        };
+
         /**
          * Getters rather than fields, because `load` swaps what is there and
          * `Object.assign` would have copied whatever was current at setup.
          */
-        const quickView = Object.assign(dive, { orbitController, load });
+        const quickView = Object.assign(dive, {
+            orbitController,
+            pointerInput,
+            load,
+            useController,
+        });
         Object.defineProperties(quickView, {
             model: { get: () => model, enumerable: true },
             state: { get: () => state, enumerable: true },
+            activeController: {
+                get: () => activeController,
+                enumerable: true,
+            },
         });
 
-        await load(source);
+        /**
+         * the light the engine started loading comes in alongside the model,
+         * so the first frame rendered is lit
+         */
+        await Promise.all([load(source), dive.loaded]);
 
         frame();
+
+        homePose = {
+            position: dive.mainView.cameraComponent.owner.position.clone(),
+            target: orbitController.target.clone(),
+        };
 
         if (settings?.autoStart ?? true) {
             await dive.startAsync();

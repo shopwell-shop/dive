@@ -35,14 +35,20 @@ export const SetStateAction = Action.define<
             ).execute();
         });
 
-        // one call instead of a hand-written copy per property, which is how
-        // gridEnabled went missing here while updatescene had it
-        gateway.applySceneSettings(_payload);
+        // a failed image is reported like a broken entity, so the entities still load
+        const sceneSettings = gateway
+            .applySceneSettings(_payload)
+            .catch((reason: unknown) => {
+                console.warn(
+                    'SET_STATE: The scene settings could not be applied.',
+                    reason,
+                );
+            });
         /**
          * the same move SET_CAMERA_TRANSFORM makes, so it is that action rather
          * than a second copy of it
          */
-        _payload.userCamera !== undefined &&
+        if (_payload.userCamera !== undefined) {
             new SetCameraTransformAction(
                 {
                     position: _payload.userCamera.position,
@@ -50,6 +56,7 @@ export const SetStateAction = Action.define<
                 },
                 { controller },
             ).execute();
+        }
 
         /** What was created, in the order the entities finished loading. Entity types without a scene object, currently cameras, contribute nothing. */
         const objects: DIVESceneObject[] = [];
@@ -61,146 +68,142 @@ export const SetStateAction = Action.define<
         // Everything is added detached, the hierarchy follows in a second pass below, so the order the entities arrive in does not matter. Each entity handles its own outcome, which lets one broken asset fail on its own.
         const promises: Promise<void>[] = [];
 
-        _payload.groups !== undefined &&
-            _payload.groups.forEach((group) => {
-                const entity = {
-                    ...group,
-                    locked: group.locked ?? false,
-                    visible: group.visible ?? true,
-                    entityType: 'group' as const,
-                };
-                promises.push(
-                    new AddObjectAction(
-                        {
-                            ...entity,
-                            parentId: null,
-                        },
-                        { gateway, registry, dispatch },
-                    )
-                        .execute()
-                        .then((object) => {
-                            added.push(entity);
-                            if (object !== undefined) objects.push(object);
-                        })
-                        .catch((reason) => {
-                            failed.push({ entity, reason });
-                        }),
-                );
-            });
+        _payload.groups?.forEach((group) => {
+            const entity = {
+                ...group,
+                locked: group.locked ?? false,
+                visible: group.visible ?? true,
+                entityType: 'group' as const,
+            };
+            promises.push(
+                new AddObjectAction(
+                    {
+                        ...entity,
+                        parentId: null,
+                    },
+                    { gateway, registry, dispatch },
+                )
+                    .execute()
+                    .then((object) => {
+                        added.push(entity);
+                        if (object !== undefined) objects.push(object);
+                    })
+                    .catch((reason) => {
+                        failed.push({ entity, reason });
+                    }),
+            );
+        });
 
-        _payload.lights !== undefined &&
-            _payload.lights.forEach((light) => {
-                const entity = {
-                    ...light,
-                    locked: light.locked ?? false,
-                    visible: light.visible ?? true,
-                    entityType: 'light' as const,
-                };
-                promises.push(
-                    new AddObjectAction(
-                        {
-                            ...entity,
-                            parentId: null,
-                        },
-                        { gateway, registry, dispatch },
-                    )
-                        .execute()
-                        .then((object) => {
-                            added.push(entity);
-                            if (object !== undefined) objects.push(object);
-                        })
-                        .catch((reason) => {
-                            failed.push({ entity, reason });
-                        }),
-                );
-            });
-        _payload.cameras !== undefined &&
-            _payload.cameras.forEach((camera) => {
-                const entity = {
-                    ...camera,
-                    locked: camera.locked ?? false,
-                    visible: camera.visible ?? true,
-                    entityType: 'camera' as const,
-                };
-                promises.push(
-                    new AddObjectAction(
-                        {
-                            ...entity,
-                            parentId: null,
-                        },
-                        { gateway, registry, dispatch },
-                    )
-                        .execute()
-                        .then((object) => {
-                            added.push(entity);
-                            if (object !== undefined) objects.push(object);
-                        })
-                        .catch((reason) => {
-                            failed.push({ entity, reason });
-                        }),
-                );
-            });
-        _payload.primitives !== undefined &&
-            _payload.primitives.forEach((primitive) => {
-                const entity = {
-                    ...primitive,
-                    locked: primitive.locked ?? false,
-                    visible: primitive.visible ?? true,
-                    entityType: 'primitive' as const,
-                };
-                promises.push(
-                    new AddObjectAction(
-                        {
-                            ...entity,
-                            parentId: null,
-                        },
-                        { gateway, registry, dispatch },
-                    )
-                        .execute()
-                        .then((object) => {
-                            added.push(entity);
-                            if (object !== undefined) objects.push(object);
-                        })
-                        .catch((reason) => {
-                            failed.push({ entity, reason });
-                        }),
-                );
-            });
-        _payload.objects !== undefined &&
-            _payload.objects.forEach((object) => {
-                const entity = {
-                    ...object,
-                    locked: object.locked ?? false,
-                    visible: object.visible ?? true,
-                    entityType: 'model' as const,
-                };
-                promises.push(
-                    new AddObjectAction(
-                        {
-                            ...entity,
-                            parentId: null,
-                        },
-                        { gateway, registry, dispatch },
-                    )
-                        .execute()
-                        .then((sceneObject) => {
-                            added.push(entity);
-                            if (sceneObject !== undefined)
-                                objects.push(sceneObject);
-                        })
-                        .catch((reason) => {
-                            failed.push({ entity, reason });
-                        }),
-                );
-            });
+        _payload.lights?.forEach((light) => {
+            const entity = {
+                ...light,
+                locked: light.locked ?? false,
+                visible: light.visible ?? true,
+                entityType: 'light' as const,
+            };
+            promises.push(
+                new AddObjectAction(
+                    {
+                        ...entity,
+                        parentId: null,
+                    },
+                    { gateway, registry, dispatch },
+                )
+                    .execute()
+                    .then((object) => {
+                        added.push(entity);
+                        if (object !== undefined) objects.push(object);
+                    })
+                    .catch((reason) => {
+                        failed.push({ entity, reason });
+                    }),
+            );
+        });
+        _payload.cameras?.forEach((camera) => {
+            const entity = {
+                ...camera,
+                locked: camera.locked ?? false,
+                visible: camera.visible ?? true,
+                entityType: 'camera' as const,
+            };
+            promises.push(
+                new AddObjectAction(
+                    {
+                        ...entity,
+                        parentId: null,
+                    },
+                    { gateway, registry, dispatch },
+                )
+                    .execute()
+                    .then((object) => {
+                        added.push(entity);
+                        if (object !== undefined) objects.push(object);
+                    })
+                    .catch((reason) => {
+                        failed.push({ entity, reason });
+                    }),
+            );
+        });
+        _payload.primitives?.forEach((primitive) => {
+            const entity = {
+                ...primitive,
+                locked: primitive.locked ?? false,
+                visible: primitive.visible ?? true,
+                entityType: 'primitive' as const,
+            };
+            promises.push(
+                new AddObjectAction(
+                    {
+                        ...entity,
+                        parentId: null,
+                    },
+                    { gateway, registry, dispatch },
+                )
+                    .execute()
+                    .then((object) => {
+                        added.push(entity);
+                        if (object !== undefined) objects.push(object);
+                    })
+                    .catch((reason) => {
+                        failed.push({ entity, reason });
+                    }),
+            );
+        });
+        _payload.objects?.forEach((object) => {
+            const entity = {
+                ...object,
+                locked: object.locked ?? false,
+                visible: object.visible ?? true,
+                entityType: 'model' as const,
+            };
+            promises.push(
+                new AddObjectAction(
+                    {
+                        ...entity,
+                        parentId: null,
+                    },
+                    { gateway, registry, dispatch },
+                )
+                    .execute()
+                    .then((sceneObject) => {
+                        added.push(entity);
+                        if (sceneObject !== undefined)
+                            objects.push(sceneObject);
+                    })
+                    .catch((reason) => {
+                        failed.push({ entity, reason });
+                    }),
+            );
+        });
 
-        _payload.spotmarks !== undefined &&
+        if (_payload.spotmarks !== undefined) {
             console.warn(
                 'SET_STATE: Spotmarks are not supported yet and will be ignored.',
             );
+        }
 
         // ADD_OBJECT resolves once its scene object exists, which for models includes loading the asset. None of these can reject, so this waits for all of them.
-        await Promise.all(promises);
+        await Promise.all([...promises, sceneSettings]);
 
         // Second pass restores the hierarchy. Every object exists by now, so the order the entities arrive in no longer matters.
         for (const entity of added) {

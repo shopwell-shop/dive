@@ -1,5 +1,38 @@
 # Changelog
 
+## [4.3.0](https://github.com/shopwell-shop/dive/compare/v4.2.2...v4.3.0) (2026-10-26)
+
+
+### 🚀 Features
+
+* dome environment ([#276](https://github.com/shopwell-shop/dive/issues/276)) ([1121d87](https://github.com/shopwell-shop/dive/commit/1121d879a9b9e02dab23b452776b9d7c9dab4ab8))
+
+
+### 📚 Documentation
+
+* add agentic issue tracker to dive project. ([#273](https://github.com/shopwell-shop/dive/issues/273)) ([1ee681f](https://github.com/shopwell-shop/dive/commit/1ee681fd20594806699a83cd634b43e8d814c9fd))
+
+## [4.2.2](https://github.com/shopwell-shop/dive/compare/v4.2.1...v4.2.2) (2026-10-15)
+
+
+### 🐛 Bug Fixes
+
+* reverse azimuthal TiltController movement. ([#270](https://github.com/shopwell-shop/dive/issues/270)) ([6d774f9](https://github.com/shopwell-shop/dive/commit/6d774f9206a6054ce6eaf9de9890f3e3529361a6))
+
+## [4.2.1](https://github.com/shopwell-shop/dive/compare/v4.2.0...v4.2.1) (2026-10-14)
+
+
+### 🐛 Bug Fixes
+
+* remove touch action from canvas in pointer input. ([#267](https://github.com/shopwell-shop/dive/issues/267)) ([a6658dd](https://github.com/shopwell-shop/dive/commit/a6658dddfe7e88247c9ef24037a642ac16c663ba))
+
+## [4.2.0](https://github.com/shopwell-shop/dive/compare/v4.1.0...v4.2.0) (2026-10-14)
+
+
+### 🚀 Features
+
+* TiltController and GyroInput ([#263](https://github.com/shopwell-shop/dive/issues/263)) ([ec9312b](https://github.com/shopwell-shop/dive/commit/ec9312b2b9992ae5f330bb00d5b7d24c9ea4b55b))
+
 ## [4.1.0](https://github.com/shopwell-shop/dive/compare/v4.0.2...v4.1.0) (2026-10-02)
 
 
