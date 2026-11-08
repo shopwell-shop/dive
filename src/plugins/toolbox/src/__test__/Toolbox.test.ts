@@ -1,7 +1,20 @@
+import {
+    BoxGeometry,
+    Mesh,
+    MeshBasicMaterial,
+    Object3D,
+    PerspectiveCamera,
+    Scene,
+} from 'three/webgpu';
 import { Toolbox } from '../Toolbox.ts';
 import { type Tool } from '../Tool.ts';
 import { type PointerContext } from '../PointerContext.ts';
-import { type DIVEScene } from '@shopwell-ag/dive';
+import {
+    HELPER_LAYER_MASK,
+    PRODUCT_LAYER_MASK,
+    UI_LAYER_MASK,
+    type DIVEScene,
+} from '@shopwell-ag/dive';
 import { type OrbitController } from '@shopwell-ag/dive/orbitcontroller';
 
 /**
@@ -24,6 +37,9 @@ class MockPointerEvent extends MouseEvent {
 }
 globalThis.PointerEvent = MockPointerEvent as unknown as typeof PointerEvent;
 
+/** The raycast suite needs a real `Raycaster`; everything else a stub. */
+const raycasterState = vi.hoisted(() => ({ real: false }));
+
 vi.mock('three/webgpu', async (importOriginal) => {
     const actual = await importOriginal<typeof import('three/webgpu')>();
     return {
@@ -34,7 +50,12 @@ vi.mock('three/webgpu', async (importOriginal) => {
                 set: vi.fn(),
             };
         }),
-        Raycaster: vi.fn().mockImplementation(function () {
+        Raycaster: vi.fn().mockImplementation(function (
+            ...args: ConstructorParameters<typeof actual.Raycaster>
+        ) {
+            if (raycasterState.real) {
+                return new actual.Raycaster(...args);
+            }
             return {
                 layers: { mask: 0 },
                 setFromCamera: vi.fn(),
@@ -113,12 +134,11 @@ const createMockCanvas = () => ({
 
 const createMockController = () =>
     ({
-        domElement: createMockCanvas(),
         object: {
             isPerspectiveCamera: true,
             layers: { mask: 0 },
         },
-        enabled: true,
+        inputEnabled: true,
     }) as unknown as OrbitController;
 
 const createMockScene = () =>
@@ -132,11 +152,18 @@ describe('Toolbox', () => {
     let toolbox: Toolbox;
     let mockScene: DIVEScene;
     let mockController: OrbitController;
+    let mockCanvas: ReturnType<typeof createMockCanvas>;
 
     beforeEach(() => {
+        raycasterState.real = false;
         mockScene = createMockScene();
         mockController = createMockController();
-        toolbox = new Toolbox(mockScene, mockController);
+        mockCanvas = createMockCanvas();
+        toolbox = new Toolbox(
+            mockScene,
+            mockController,
+            mockCanvas as unknown as HTMLElement,
+        );
     });
 
     afterEach(() => {
@@ -237,30 +264,38 @@ describe('Toolbox', () => {
 
         beforeEach(() => {
             addEventListenerCalls = new Map();
-            (
-                mockController.domElement.addEventListener as any
-            ).mockImplementation((type: string, handler: Function) => {
-                addEventListenerCalls.set(type, handler);
-            });
+            (mockCanvas.addEventListener as any).mockImplementation(
+                (type: string, handler: Function) => {
+                    addEventListenerCalls.set(type, handler);
+                },
+            );
 
             // Recreate toolbox to capture event listeners
             toolbox.dispose();
-            toolbox = new Toolbox(mockScene, mockController);
+            toolbox = new Toolbox(
+                mockScene,
+                mockController,
+                mockCanvas as unknown as HTMLElement,
+            );
         });
 
         it('should register event listeners on construction', () => {
-            expect(
-                mockController.domElement.addEventListener,
-            ).toHaveBeenCalledWith('pointermove', expect.any(Function));
-            expect(
-                mockController.domElement.addEventListener,
-            ).toHaveBeenCalledWith('pointerdown', expect.any(Function));
-            expect(
-                mockController.domElement.addEventListener,
-            ).toHaveBeenCalledWith('pointerup', expect.any(Function));
-            expect(
-                mockController.domElement.addEventListener,
-            ).toHaveBeenCalledWith('wheel', expect.any(Function));
+            expect(mockCanvas.addEventListener).toHaveBeenCalledWith(
+                'pointermove',
+                expect.any(Function),
+            );
+            expect(mockCanvas.addEventListener).toHaveBeenCalledWith(
+                'pointerdown',
+                expect.any(Function),
+            );
+            expect(mockCanvas.addEventListener).toHaveBeenCalledWith(
+                'pointerup',
+                expect.any(Function),
+            );
+            expect(mockCanvas.addEventListener).toHaveBeenCalledWith(
+                'wheel',
+                expect.any(Function),
+            );
         });
 
         it('should dispatch pointer move to active tools', () => {
@@ -444,15 +479,17 @@ describe('Toolbox', () => {
 
         beforeEach(() => {
             const listeners = new Map<string, (event: PointerEvent) => void>();
-            (
-                mockController.domElement.addEventListener as any
-            ).mockImplementation(
+            (mockCanvas.addEventListener as any).mockImplementation(
                 (type: string, handler: (event: PointerEvent) => void) => {
                     listeners.set(type, handler);
                 },
             );
             toolbox.dispose();
-            toolbox = new Toolbox(mockScene, mockController);
+            toolbox = new Toolbox(
+                mockScene,
+                mockController,
+                mockCanvas as unknown as HTMLElement,
+            );
             move = listeners.get('pointermove')!;
 
             raycasts = 0;
@@ -522,6 +559,150 @@ describe('Toolbox', () => {
             expect(() =>
                 toolbox.enableTool('nonexistent' as any),
             ).not.toThrow();
+        });
+    });
+
+    const createProductMesh = (): Mesh => {
+        const mesh = new Mesh(
+            new BoxGeometry(1, 1, 1),
+            new MeshBasicMaterial(),
+        );
+        mesh.layers.mask = PRODUCT_LAYER_MASK;
+        return mesh;
+    };
+
+    describe('raycast', () => {
+        /**
+         * Deliberately uses a real `Raycaster`: the whole point is to exercise
+         * `Toolbox.raycast()` against a realistically shaped scene graph. Mocking
+         * `intersectObjects` to return `[]` is what let the always-empty
+         * candidate list go unnoticed.
+         */
+        let scene: Scene;
+        let root: Object3D;
+        let camera: PerspectiveCamera;
+
+        /**
+         * Aims the shared raycaster at the test mesh. Deliberately asymmetric: any
+         * point where the hit lands on x == y (or x == -y) sits on the shared
+         * diagonal of the two triangles forming the cube's front face, and gets
+         * reported as two intersections at the same distance.
+         */
+        const aimAtMesh = (): void => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (toolbox as any).updatePointer({ offsetX: 530, offsetY: 460 });
+        };
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const raycast = () => (toolbox as any).raycast();
+
+        beforeEach(() => {
+            raycasterState.real = true;
+            toolbox.dispose();
+
+            /**
+             * Mirrors the real hierarchy: the scene's direct children are plain
+             * Object3Ds, never meshes.
+             */
+            scene = new Scene();
+            root = new Object3D();
+            root.name = 'Root';
+            scene.add(root);
+
+            camera = new PerspectiveCamera(75, 1, 0.1, 1000);
+            camera.position.set(0, 0, 5);
+            camera.lookAt(0, 0, 0);
+            camera.updateMatrixWorld(true);
+
+            const controller = {
+                object: { camera },
+            } as unknown as OrbitController;
+
+            toolbox = new Toolbox(
+                scene as unknown as DIVEScene,
+                controller,
+                createMockCanvas() as unknown as HTMLElement,
+            );
+        });
+
+        it('should hit a mesh nested under a non-mesh scene child', () => {
+            const mesh = createProductMesh();
+            root.add(mesh);
+            scene.updateMatrixWorld(true);
+
+            aimAtMesh();
+
+            const intersects = raycast();
+
+            expect(intersects).toHaveLength(1);
+            expect(intersects[0].object).toBe(mesh);
+        });
+
+        it('should hit a mesh nested several levels deep', () => {
+            const group = new Object3D();
+            const mesh = createProductMesh();
+            group.add(mesh);
+            root.add(group);
+            scene.updateMatrixWorld(true);
+
+            aimAtMesh();
+
+            expect(raycast()[0].object).toBe(mesh);
+        });
+
+        it('should not hit a mesh that is hidden itself', () => {
+            const mesh = createProductMesh();
+            mesh.visible = false;
+            root.add(mesh);
+            scene.updateMatrixWorld(true);
+
+            aimAtMesh();
+
+            expect(raycast()).toHaveLength(0);
+        });
+
+        it('should not hit a visible mesh whose ancestor is hidden', () => {
+            const mesh = createProductMesh();
+            root.add(mesh);
+            root.visible = false;
+            scene.updateMatrixWorld(true);
+
+            aimAtMesh();
+
+            expect(raycast()).toHaveLength(0);
+        });
+
+        it('should not hit meshes outside the product and ui layers', () => {
+            const helper = createProductMesh();
+            helper.layers.mask = HELPER_LAYER_MASK;
+            root.add(helper);
+            scene.updateMatrixWorld(true);
+
+            aimAtMesh();
+
+            expect(raycast()).toHaveLength(0);
+        });
+
+        it('should hit ui layer meshes', () => {
+            const handle = createProductMesh();
+            handle.layers.mask = UI_LAYER_MASK;
+            root.add(handle);
+            scene.updateMatrixWorld(true);
+
+            aimAtMesh();
+
+            expect(raycast()[0].object).toBe(handle);
+        });
+
+        it('should return an empty list when the ray misses everything', () => {
+            const mesh = createProductMesh();
+            mesh.position.set(1000, 0, 0);
+            root.add(mesh);
+            scene.updateMatrixWorld(true);
+
+            aimAtMesh();
+
+            expect(raycast()).toHaveLength(0);
         });
     });
 });

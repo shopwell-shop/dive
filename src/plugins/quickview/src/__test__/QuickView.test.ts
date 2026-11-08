@@ -4,9 +4,17 @@
 
 import type { Mock } from 'vitest';
 import { vi } from 'vitest';
-import { DIVE, DIVENode, ModelComponent } from '@shopwell-ag/dive';
+import {
+    DIVE,
+    DIVENode,
+    GyroInput,
+    ModelComponent,
+    PointerInput,
+    SoftShadowComponent,
+} from '@shopwell-ag/dive';
 import { OrbitController } from '@shopwell-ag/dive/orbitcontroller';
 import { State, type StateData } from '@shopwell-ag/dive/state';
+import { TiltController } from '@shopwell-ag/dive/tiltcontroller';
 import { QuickView, QuickViewDefaultSettings } from '../QuickView.ts';
 
 /**
@@ -25,6 +33,9 @@ const {
     bounds,
     cameraResize,
     canvasLayout,
+    gyroPermission,
+    gyroEnable,
+    diveLoaded,
 } = vi.hoisted(() => ({
     diveDisposeAsync: vi.fn(async () => {}),
     diveStartAsync: vi.fn(async () => {}),
@@ -38,6 +49,10 @@ const {
     cameraResize: vi.fn(),
     // what a laid-out canvas reports; zero stands for one not mounted yet
     canvasLayout: { clientWidth: 800, clientHeight: 600 },
+    gyroPermission: vi.fn(async () => true),
+    gyroEnable: vi.fn(async () => {}),
+    // what `dive.loaded` hands out, read through a spy
+    diveLoaded: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock('@shopwell-ag/dive', () => {
@@ -48,7 +63,12 @@ vi.mock('@shopwell-ag/dive', () => {
                     canvas: canvasLayout,
                     // the controller drives the component, not the camera
                     cameraComponent: {
-                        owner: { position: { set: vi.fn() } },
+                        owner: {
+                            position: {
+                                set: vi.fn(),
+                                clone: vi.fn(() => ({ home: 'position' })),
+                            },
+                        },
                         onResize: cameraResize,
                     },
                 },
@@ -60,7 +80,10 @@ vi.mock('@shopwell-ag/dive', () => {
                         },
                     },
                 },
-                clock: { addTicker: vi.fn() },
+                clock: { addTicker: vi.fn(), removeTicker: vi.fn() },
+                get loaded() {
+                    return diveLoaded();
+                },
                 startAsync: diveStartAsync,
                 disposeAsync: diveDisposeAsync,
             };
@@ -90,13 +113,46 @@ vi.mock('@shopwell-ag/dive', () => {
             return this;
         }),
         ModelComponent: vi.fn(),
+        SoftShadowComponent: vi.fn(),
+        PointerInput: vi.fn(function () {
+            return { dispose: vi.fn() };
+        }),
+        GyroInput: Object.assign(
+            vi.fn(function () {
+                return {
+                    enable: gyroEnable,
+                    disable: vi.fn(),
+                    dispose: vi.fn(),
+                };
+            }),
+            { requestPermission: gyroPermission },
+        ),
     };
 });
 
 vi.mock('@shopwell-ag/dive/orbitcontroller', () => {
     return {
         OrbitController: vi.fn(function () {
-            return { focusObject: vi.fn(), dispose: vi.fn() };
+            return {
+                focusObject: vi.fn(),
+                dispose: vi.fn(),
+                connect: vi.fn(),
+                enabled: true,
+                target: { clone: vi.fn(() => ({ home: 'target' })) },
+            };
+        }),
+    };
+});
+
+vi.mock('@shopwell-ag/dive/tiltcontroller', () => {
+    return {
+        TiltController: vi.fn(function () {
+            return {
+                connect: vi.fn(),
+                setHome: vi.fn(),
+                dispose: vi.fn(),
+                enabled: false,
+            };
         }),
     };
 });
@@ -127,11 +183,19 @@ describe('QuickView', () => {
         setFromURL.mockImplementation(async () => {});
         diveStartAsync.mockImplementation(async () => {});
         statePerformAction.mockImplementation(async () => []);
+        // reset, not just cleared: a pending once-implementation would leak
+        gyroPermission.mockReset().mockImplementation(async () => true);
+        gyroEnable.mockReset().mockImplementation(async () => {});
+        diveLoaded.mockReset().mockImplementation(() => Promise.resolve());
         vi.spyOn(console, 'error').mockImplementation(() => {});
     });
 
     it('exposes the DIVE defaults as QuickView defaults', () => {
         expect(QuickViewDefaultSettings).toMatchObject({ displayGrid: false });
+    });
+
+    it('should leave the contact shadow off by default', () => {
+        expect(QuickViewDefaultSettings.softShadow).toBe(false);
     });
 
     it('should build the scene without auto start and start it afterwards', async () => {
@@ -148,6 +212,117 @@ describe('QuickView', () => {
         expect(DIVE).toHaveBeenCalledWith({
             displayGrid: true,
             autoStart: false,
+        });
+    });
+
+    it('should keep its own settings away from the engine', async () => {
+        await QuickView('test_uri', { displayGrid: true, softShadow: true });
+
+        expect(DIVE).toHaveBeenCalledWith({
+            displayGrid: true,
+            autoStart: false,
+        });
+    });
+
+    describe('the initial light', () => {
+        it('should not start before what the engine loads has loaded', async () => {
+            let finish!: () => void;
+            diveLoaded.mockImplementation(
+                () => new Promise<void>((resolve) => (finish = resolve)),
+            );
+
+            const created = QuickView('test_uri');
+            await vi.waitFor(() => expect(setFromURL).toHaveBeenCalled());
+            await new Promise((resolve) => setTimeout(resolve));
+
+            expect(diveStartAsync).not.toHaveBeenCalled();
+
+            finish();
+            await created;
+
+            expect(diveStartAsync).toHaveBeenCalledTimes(1);
+        });
+
+        it('should wait for it alongside the model, not after it', async () => {
+            let arrive!: () => void;
+            setFromURL.mockImplementation(
+                () => new Promise<void>((resolve) => (arrive = resolve)),
+            );
+
+            const created = QuickView('test_uri');
+            await vi.waitFor(() => expect(setFromURL).toHaveBeenCalled());
+
+            expect(diveLoaded).toHaveBeenCalled();
+
+            arrive();
+            await created;
+        });
+
+        it('should wait for it even when it was told not to start', async () => {
+            let finish!: () => void;
+            diveLoaded.mockImplementation(
+                () => new Promise<void>((resolve) => (finish = resolve)),
+            );
+            let resolved = false;
+
+            const created = QuickView('test_uri', { autoStart: false }).then(
+                () => (resolved = true),
+            );
+            await new Promise((resolve) => setTimeout(resolve));
+
+            expect(resolved).toBe(false);
+
+            finish();
+            await created;
+
+            expect(diveStartAsync).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('softShadow', () => {
+        /** whether a node was given a contact shadow */
+        const hasShadow = (node: DIVENode | null) =>
+            vi
+                .mocked(node!.addComponent)
+                .mock.calls.some(
+                    ([component]) => component instanceof SoftShadowComponent,
+                );
+
+        it('should put no shadow under the model unless asked to', async () => {
+            const quickView = await QuickView('test_uri');
+
+            expect(hasShadow(quickView.model)).toBe(false);
+            expect(SoftShadowComponent).not.toHaveBeenCalled();
+        });
+
+        it('should put a shadow under the model', async () => {
+            const quickView = await QuickView('test_uri', { softShadow: true });
+
+            expect(hasShadow(quickView.model)).toBe(true);
+        });
+
+        it('should keep the shadow for the next model', async () => {
+            // it sits on the node, which the next model reuses
+            const quickView = await QuickView('test_uri', { softShadow: true });
+
+            await quickView.load('second_uri');
+
+            expect(SoftShadowComponent).toHaveBeenCalledTimes(1);
+            expect(hasShadow(quickView.model)).toBe(true);
+        });
+
+        it('should put none under scene state', async () => {
+            await QuickView(sceneData, { softShadow: true });
+
+            expect(SoftShadowComponent).not.toHaveBeenCalled();
+        });
+
+        it('should put one under a model that replaces scene state', async () => {
+            const quickView = await QuickView(sceneData, { softShadow: true });
+
+            await quickView.load('a_uri');
+
+            expect(hasShadow(quickView.model)).toBe(true);
         });
     });
 
@@ -649,6 +824,232 @@ describe('QuickView', () => {
 
             expect(stateDestroyInstance).toHaveBeenCalledTimes(1);
             expect(State).toHaveBeenCalledTimes(2);
+        });
+    });
+
+    describe('controllers', () => {
+        /** What a mocked constructor built on its `index`th call. */
+        const built = <T>(constructor: unknown, index = 0): T =>
+            vi.mocked(constructor as Mock).mock.results[index].value as T;
+
+        type Tilt = {
+            connect: Mock;
+            setHome: Mock;
+            dispose: Mock;
+            enabled: boolean;
+        };
+        type Gyro = { enable: Mock; disable: Mock; dispose: Mock };
+
+        it('should drive the orbit controller from the pointer on the canvas', async () => {
+            const quickView = await QuickView('test_uri');
+
+            expect(PointerInput).toHaveBeenCalledWith(canvasLayout);
+            expect(quickView.pointerInput).toBe(built(PointerInput));
+            expect(quickView.orbitController.connect).toHaveBeenCalledWith(
+                quickView.pointerInput,
+            );
+            expect(quickView.activeController).toBe('orbit');
+        });
+
+        it('should do nothing for the controller that is already active', async () => {
+            const quickView = await QuickView('test_uri');
+
+            await quickView.useController('orbit');
+
+            expect(quickView.activeController).toBe('orbit');
+            expect(quickView.orbitController.enabled).toBe(true);
+        });
+
+        it('should hand the camera to the tilt controller', async () => {
+            const quickView = await QuickView('test_uri');
+
+            await quickView.useController('gyro');
+
+            const tilt = built<Tilt>(TiltController);
+            const gyro = built<Gyro>(GyroInput);
+            expect(TiltController).toHaveBeenCalledWith(
+                quickView.mainView.cameraComponent,
+                { enabled: false },
+            );
+            expect(tilt.connect).toHaveBeenCalledWith(gyro);
+            expect(quickView.clock.addTicker).toHaveBeenCalledWith(tilt);
+            expect(gyro.enable).toHaveBeenCalledTimes(1);
+
+            expect(quickView.orbitController.enabled).toBe(false);
+            expect(tilt.enabled).toBe(true);
+            expect(quickView.activeController).toBe('gyro');
+        });
+
+        it('should ask for the sensor before anything is awaited', async () => {
+            const quickView = await QuickView('test_uri');
+
+            // iOS only grants it while the user gesture is still current
+            const switched = quickView.useController('gyro');
+            expect(gyroPermission).toHaveBeenCalledTimes(1);
+
+            await switched;
+        });
+
+        it('should turn around the pose the first load was framed in', async () => {
+            const quickView = await QuickView('test_uri');
+
+            await quickView.useController('gyro');
+
+            expect(built<Tilt>(TiltController).setHome).toHaveBeenCalledWith({
+                position: { home: 'position' },
+                target: { home: 'target' },
+            });
+
+            const position = vi.mocked(
+                quickView.mainView.cameraComponent.owner.position.clone,
+            );
+            expect(position.mock.invocationCallOrder[0]).toBeGreaterThan(
+                vi.mocked(quickView.orbitController.focusObject).mock
+                    .invocationCallOrder[0],
+            );
+        });
+
+        it('should keep the orbit controller when the sensor is refused', async () => {
+            gyroPermission.mockResolvedValueOnce(false);
+            const quickView = await QuickView('test_uri');
+
+            await expect(quickView.useController('gyro')).rejects.toThrow(
+                'not permitted',
+            );
+
+            expect(TiltController).not.toHaveBeenCalled();
+            expect(quickView.activeController).toBe('orbit');
+            expect(quickView.orbitController.enabled).toBe(true);
+        });
+
+        it('should pass on a request for the sensor that failed', async () => {
+            gyroPermission.mockRejectedValueOnce(new Error('not allowed'));
+            const quickView = await QuickView('test_uri');
+
+            await expect(quickView.useController('gyro')).rejects.toThrow(
+                'not allowed',
+            );
+
+            expect(quickView.activeController).toBe('orbit');
+        });
+
+        it('should not leave a failed request unhandled when overtaken', async () => {
+            gyroPermission.mockRejectedValueOnce(new Error('not allowed'));
+            const quickView = await QuickView('test_uri');
+
+            const toGyro = quickView.useController('gyro');
+            await quickView.useController('orbit');
+
+            await expect(toGyro).resolves.toBeUndefined();
+        });
+
+        it('should keep the orbit controller when the sensor reports nothing', async () => {
+            gyroEnable.mockRejectedValueOnce(new Error('no orientation'));
+            const quickView = await QuickView('test_uri');
+
+            await expect(quickView.useController('gyro')).rejects.toThrow(
+                'no orientation',
+            );
+
+            expect(quickView.activeController).toBe('orbit');
+            expect(quickView.orbitController.enabled).toBe(true);
+            expect(built<Tilt>(TiltController).enabled).toBe(false);
+        });
+
+        it('should let a failed switch not block the next one', async () => {
+            gyroEnable.mockRejectedValueOnce(new Error('no orientation'));
+            const quickView = await QuickView('test_uri');
+
+            await expect(quickView.useController('gyro')).rejects.toThrow();
+            await quickView.useController('gyro');
+
+            expect(quickView.activeController).toBe('gyro');
+        });
+
+        it('should hand the camera back to the orbit controller', async () => {
+            const quickView = await QuickView('test_uri');
+            await quickView.useController('gyro');
+
+            await quickView.useController('orbit');
+
+            const tilt = built<Tilt>(TiltController);
+            expect(built<Gyro>(GyroInput).disable).toHaveBeenCalledTimes(1);
+            expect(tilt.enabled).toBe(false);
+            expect(quickView.orbitController.enabled).toBe(true);
+            expect(quickView.activeController).toBe('orbit');
+        });
+
+        it('should build the tilt controller only once', async () => {
+            const quickView = await QuickView('test_uri');
+
+            await quickView.useController('gyro');
+            await quickView.useController('orbit');
+            await quickView.useController('gyro');
+
+            expect(TiltController).toHaveBeenCalledTimes(1);
+            expect(GyroInput).toHaveBeenCalledTimes(1);
+            expect(quickView.activeController).toBe('gyro');
+        });
+
+        it('should let a newer switch overtake one still waiting for the sensor', async () => {
+            let wake!: () => void;
+            gyroEnable.mockImplementationOnce(
+                () => new Promise<void>((resolve) => (wake = resolve)),
+            );
+            const quickView = await QuickView('test_uri');
+
+            const toGyro = quickView.useController('gyro');
+            await vi.waitFor(() => expect(gyroEnable).toHaveBeenCalled());
+            const toOrbit = quickView.useController('orbit');
+            wake();
+            await Promise.all([toGyro, toOrbit]);
+
+            expect(built<Gyro>(GyroInput).disable).toHaveBeenCalled();
+            expect(built<Tilt>(TiltController).enabled).toBe(false);
+            expect(quickView.orbitController.enabled).toBe(true);
+            expect(quickView.activeController).toBe('orbit');
+        });
+
+        it('should skip a switch that was overtaken before it ran', async () => {
+            const quickView = await QuickView('test_uri');
+
+            const toGyro = quickView.useController('gyro');
+            const toOrbit = quickView.useController('orbit');
+            await Promise.all([toGyro, toOrbit]);
+
+            expect(TiltController).not.toHaveBeenCalled();
+            expect(quickView.activeController).toBe('orbit');
+        });
+
+        it('should take the gyro down with the view', async () => {
+            const quickView = await QuickView('test_uri');
+            await quickView.useController('gyro');
+
+            await quickView.disposeAsync();
+
+            const tilt = built<Tilt>(TiltController);
+            expect(quickView.pointerInput.dispose).toHaveBeenCalledTimes(1);
+            expect(tilt.dispose).toHaveBeenCalledTimes(1);
+            expect(built<Gyro>(GyroInput).dispose).toHaveBeenCalledTimes(1);
+            expect(quickView.clock.removeTicker).toHaveBeenCalledWith(tilt);
+        });
+
+        it('should free a gyro whose sensor woke up after disposal', async () => {
+            let wake!: () => void;
+            gyroEnable.mockImplementationOnce(
+                () => new Promise<void>((resolve) => (wake = resolve)),
+            );
+            const quickView = await QuickView('test_uri');
+
+            const toGyro = quickView.useController('gyro');
+            await vi.waitFor(() => expect(gyroEnable).toHaveBeenCalled());
+            await quickView.disposeAsync();
+            wake();
+            await toGyro;
+
+            expect(built<Tilt>(TiltController).dispose).toHaveBeenCalled();
+            expect(built<Gyro>(GyroInput).dispose).toHaveBeenCalled();
+            expect(quickView.orbitController.enabled).toBe(true);
         });
     });
 
